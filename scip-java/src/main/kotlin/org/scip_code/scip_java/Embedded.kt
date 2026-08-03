@@ -25,6 +25,8 @@ object Embedded {
 
     fun gradlePluginJar(tmpDir: Path): Path = copyFile(tmpDir, "gradle-plugin.jar")
 
+    fun mavenGraphPluginJar(tmpDir: Path): Path = copyFile(tmpDir, "maven-graph-plugin.jar")
+
     fun scipKotlincJar(tmpDir: Path): Path = copyFile(tmpDir, "scip-kotlinc.jar")
 
     private fun javacErrorpath(tmp: Path): Path = tmp.resolve("errorpath.txt")

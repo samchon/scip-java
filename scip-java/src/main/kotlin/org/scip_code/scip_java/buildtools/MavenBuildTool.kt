@@ -47,20 +47,7 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
                     graphRoot?.let { graphTarget },
                     tmp,
                 )
-            val command = mutableListOf<String>()
-            command += mavenScript
-            if (graphRoot == null) command += "-Dmaven.compiler.useIncrementalCompilation=false"
-            // NOTE(olafur): the square/javapoet repo sets compilerId to
-            // 'javac-with-javac', which appears to override the
-            // '-Dmaven.compiler.executable' setting. Forcing the compilerId to
-            // 'javac' fixes the issue for this repo.
-            command += "-Dmaven.compiler.compilerId=javac"
-            command += "-Dmaven.compiler.executable=${javac.executable}"
-            command += "-Dmaven.compiler.fork=true"
-            if (graphStore != null) {
-                command += "org.apache.maven.plugins:maven-help-plugin:3.5.2:effective-pom"
-            }
-            command +=
+            val buildCommand =
                 index.finalBuildCommand(
                     listOf(
                         "--batch-mode",
@@ -71,19 +58,36 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
                         "-DskipTests",
                     )
                 )
+            val graphPlugin =
+                if (graphStore == null) null
+                else MavenGraphPlugin.install(index, mavenScript, buildCommand, tmp)
+            if (graphPlugin != null && graphPlugin.result.exitCode != 0) {
+                return@withDirectory graphPlugin.result
+            }
+            val command = mutableListOf<String>()
+            command += mavenScript
+            if (graphRoot == null) command += "-Dmaven.compiler.useIncrementalCompilation=false"
+            // NOTE(olafur): the square/javapoet repo sets compilerId to
+            // 'javac-with-javac', which appears to override the
+            // '-Dmaven.compiler.executable' setting. Forcing the compilerId to
+            // 'javac' fixes the issue for this repo.
+            command += "-Dmaven.compiler.compilerId=javac"
+            command += "-Dmaven.compiler.executable=${javac.executable}"
+            command += "-Dmaven.compiler.fork=true"
+            graphPlugin?.goal?.let(command::add)
+            command += buildCommand
 
             val exit =
                 index.app.runProcess(
                     command,
-                    env = javac.environment,
-                    captureStdout = graphStore != null,
+                    env =
+                        javac.environment +
+                            mapOf(
+                                "SCIP_GRAPH_MAVEN_REACTOR" to
+                                    (graphStore?.reactorManifest?.toString() ?: "")
+                            ),
                 )
             val result = Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: exit
-            if (result.exitCode == 0 && graphStore != null) {
-                graphStore.captureEffectivePom(
-                    requireNotNull(exit.stdout) { "scip-java: Maven stdout was not captured" }
-                )
-            }
             result
         }
 }

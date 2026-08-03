@@ -125,12 +125,18 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             assertEquals(listOf("maven:module-a"), artifactTargets(artifact))
             assertEquals(listOf("module-a/src/main/java/example/A.java"), artifactSources(artifact))
             assertTrue(Files.isRegularFile(renamed))
+
+            val withUserOutput = arguments.dropLast(1) + listOf("compile", "-Doutput=user-value")
+            val userOutput = runScipJava(workspace, withUserOutput)
+            assertEquals(0, userOutput.first, userOutput.second)
+            assertEquals(listOf("maven:module-a", "maven:output-poison"), artifactTargets(artifact))
         } finally {
             base.toFile().deleteRecursively()
         }
     }
 
     private fun writeProject(root: Path) {
+        write(root.resolve(".mvn/maven.config"), "-q\n")
         write(
             root.resolve("pom.xml"),
             """
@@ -152,7 +158,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             """
                 .trimIndent(),
         )
-        for (module in listOf("module-a", "module-b")) {
+        for (module in listOf("module-a", "module-b", "output-poison")) {
             write(
                 root.resolve("$module/pom.xml"),
                 """
@@ -172,6 +178,10 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
         write(
             root.resolve("module-b/src/main/java/example/B.java"),
             "package example; public class B {}\n",
+        )
+        write(
+            root.resolve("output-poison/src/main/java/example/Output.java"),
+            "package example; public class Output {}\n",
         )
     }
 

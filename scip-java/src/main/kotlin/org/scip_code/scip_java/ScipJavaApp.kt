@@ -49,11 +49,7 @@ class ScipJavaApp {
      * Spawn an external process using the current working directory. Stdout and stderr are streamed
      * to the env's PrintStreams line-by-line.
      */
-    fun runProcess(
-        command: List<String>,
-        env: Map<String, String> = emptyMap(),
-        captureStdout: Boolean = false,
-    ): ProcessResult {
+    fun runProcess(command: List<String>, env: Map<String, String> = emptyMap()): ProcessResult {
         val syntax = command.joinToString(" ") { if (' ' in it) "'$it'" else it }
         this.env.standardOutput.println("$ $syntax")
         return ProcessRunner.run(
@@ -62,7 +58,6 @@ class ScipJavaApp {
             env = env,
             onStdout = { this.env.standardOutput.println(it) },
             onStderr = { this.env.standardError.println(it) },
-            captureStdout = captureStdout,
         )
     }
 

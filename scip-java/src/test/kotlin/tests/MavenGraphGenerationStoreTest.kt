@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.HexFormat
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -15,21 +16,6 @@ import kotlin.test.assertTrue
 import org.scip_code.scip_java.buildtools.MavenGraphGenerationStore
 
 class MavenGraphGenerationStoreTest {
-    @Test
-    fun capturesOnlyTheRawEffectivePomFromMavenOutput() {
-        withWorkspace { workspace ->
-            val store =
-                MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
-            store.prepare()
-            val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><projects><project/></projects>"
-            val output = "[INFO] effective model follows\r\n$xml\r\n[INFO] BUILD SUCCESS\r\n"
-
-            store.captureEffectivePom(output.toByteArray(StandardCharsets.UTF_8))
-
-            assertEquals(xml, Files.readString(store.effectivePom, StandardCharsets.UTF_8))
-        }
-    }
-
     @Test
     fun publishesOnlySuccessfulCompleteGenerations() {
         withWorkspace { workspace ->
@@ -124,8 +110,8 @@ class MavenGraphGenerationStoreTest {
                 shard("maven:sub", "sub/inherited/java/B.java"),
             )
             write(
-                store.effectivePom,
-                effectivePom(
+                store.reactorManifest,
+                reactorManifest(
                     workspace to workspace.resolve("src/main/java"),
                     workspace.resolve("sub") to workspace.resolve("sub/inherited/java"),
                 ),
@@ -133,7 +119,10 @@ class MavenGraphGenerationStoreTest {
             store.commit()
 
             store.prepare()
-            write(store.effectivePom, effectivePom(workspace to workspace.resolve("src/main/java")))
+            write(
+                store.reactorManifest,
+                reactorManifest(workspace to workspace.resolve("src/main/java")),
+            )
             store.commit()
 
             val generation = Files.readString(store.current).trim()
@@ -171,20 +160,24 @@ class MavenGraphGenerationStoreTest {
             )
     }
 
-    private fun effectivePom(vararg projects: Pair<Path, Path>): String = buildString {
-        append("<projects>")
-        for ((module, source) in projects) {
-            append("<project><build><sourceDirectory>")
-            append(xml(source))
-            append("</sourceDirectory><testSourceDirectory>")
-            append(xml(module.resolve("src/test/java")))
-            append("</testSourceDirectory><directory>")
-            append(xml(module.resolve("target")))
-            append("</directory></build></project>")
+    private fun reactorManifest(vararg projects: Pair<Path, Path>): String = buildString {
+        append("schema\t1\n")
+        for (module in projects.map { it.first }.distinct()) {
+            append("project\t").append(encoded(module)).append('\n')
         }
-        append("</projects>\n")
+        for ((module, source) in projects) {
+            append("source\t")
+                .append(encoded(module))
+                .append('\t')
+                .append(encoded(source))
+                .append('\n')
+        }
     }
 
-    private fun xml(path: Path): String =
-        path.toAbsolutePath().normalize().toString().replace("&", "&amp;")
+    private fun encoded(path: Path): String =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(
+                path.toAbsolutePath().normalize().toString().toByteArray(StandardCharsets.UTF_8)
+            )
 }

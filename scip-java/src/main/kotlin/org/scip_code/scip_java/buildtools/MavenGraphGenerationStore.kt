@@ -33,21 +33,7 @@ internal class MavenGraphGenerationStore(
     internal val staging: Path = outputRoot.resolve("staging")
     private val generations = outputRoot.resolve("generations")
     internal val current: Path = outputRoot.resolve("CURRENT")
-    internal val effectivePom: Path = staging.resolve("EFFECTIVE_POM.xml")
-
-    internal fun captureEffectivePom(output: ByteArray) {
-        val start = output.indexOf("<?xml".toByteArray(StandardCharsets.US_ASCII))
-        require(start >= 0) { "scip-java: Maven effective POM was absent from stdout" }
-        val projectsEnd =
-            output.indexOf("</projects>".toByteArray(StandardCharsets.US_ASCII), start)
-        val closing =
-            if (projectsEnd >= 0) "</projects>".toByteArray(StandardCharsets.US_ASCII)
-            else "</project>".toByteArray(StandardCharsets.US_ASCII)
-        val closingStart = if (projectsEnd >= 0) projectsEnd else output.indexOf(closing, start)
-        require(closingStart >= 0) { "scip-java: Maven effective POM was truncated on stdout" }
-        Files.createDirectories(effectivePom.parent)
-        Files.write(effectivePom, output.copyOfRange(start, closingStart + closing.size))
-    }
+    internal val reactorManifest: Path = staging.resolve("MAVEN_REACTOR")
 
     /** Start from the last committed generation without publishing any new state. */
     fun prepare() {
@@ -59,13 +45,13 @@ internal class MavenGraphGenerationStore(
         Files.deleteIfExists(staging.resolve("TARGET"))
         Files.deleteIfExists(staging.resolve("TARGETS"))
         Files.deleteIfExists(staging.resolve("SOURCES"))
-        Files.deleteIfExists(effectivePom)
+        Files.deleteIfExists(reactorManifest)
     }
 
     /** Reconcile deleted sources and publish only after Maven completed successfully. */
     fun commit() {
         val ownership = reactorOwnership()
-        Files.deleteIfExists(effectivePom)
+        Files.deleteIfExists(reactorManifest)
         val previouslyDeclared = readLines(staging.resolve(declaredSourcesFile))
         val seenSources = seenSources()
         val shards = graphShards(staging)
@@ -157,7 +143,7 @@ internal class MavenGraphGenerationStore(
      * remains on disk; generated sources retain the existing last-good behavior.
      */
     private fun reactorOwnership(): ReactorOwnership {
-        if (Files.isRegularFile(effectivePom)) return effectiveReactorOwnership(effectivePom)
+        if (Files.isRegularFile(reactorManifest)) return effectiveReactorOwnership(reactorManifest)
         val workspace = sourceRoot.toAbsolutePath().normalize()
         val modules = linkedSetOf<Path>()
         var complete = true
@@ -226,45 +212,43 @@ internal class MavenGraphGenerationStore(
         return ReactorOwnership(targets, sources, complete)
     }
 
-    /**
-     * Resolve the exact reactor Maven selected for this invocation. The effective POM is generated
-     * by the same Maven command immediately before the requested lifecycle goals, so inactive
-     * profile modules are absent and inherited/profile build roots are already interpolated.
-     */
+    /** Resolve the exact effective projects and source roots selected by this Maven session. */
     private fun effectiveReactorOwnership(path: Path): ReactorOwnership {
         val workspace = sourceRoot.toAbsolutePath().normalize()
-        val root = parsePom(path)
-        val projects = if (root.nodeName == "project") listOf(root) else children(root, "project")
-        require(projects.isNotEmpty()) { "scip-java: Maven effective POM has no projects at $path" }
+        val lines = Files.readAllLines(path, StandardCharsets.UTF_8)
+        require(lines.firstOrNull() == "schema\t1") {
+            "scip-java: unsupported Maven reactor manifest at $path"
+        }
+        val projects = linkedSetOf<Path>()
+        val roots = mutableListOf<Pair<Path, Path>>()
+        for (line in lines.drop(1)) {
+            val fields = line.split('\t')
+            when (fields.firstOrNull()) {
+                "project" -> {
+                    require(fields.size == 2) { "scip-java: malformed Maven project row at $path" }
+                    projects.add(decodePath(fields[1]))
+                }
+                "source" -> {
+                    require(fields.size == 3) { "scip-java: malformed Maven source row at $path" }
+                    roots += decodePath(fields[1]) to decodePath(fields[2])
+                }
+                else -> error("scip-java: unknown Maven reactor row at $path")
+            }
+        }
+        require(projects.isNotEmpty()) {
+            "scip-java: Maven reactor manifest has no projects at $path"
+        }
         val targets = linkedSetOf<String>()
         val sources = linkedSetOf<String>()
-        for (project in projects) {
-            val build = child(project, "build")
-            val roots =
-                listOfNotNull(build?.let(::sourceDirectory), build?.let(::testSourceDirectory))
-                    .map(Path::of)
-                    .map { if (it.isAbsolute) it else workspace.resolve(it) }
-                    .map(Path::toAbsolutePath)
-                    .map(Path::normalize)
-            val buildDirectory =
-                child(build ?: project, "directory")
-                    ?.textContent
-                    .orEmpty()
-                    .trim()
-                    .takeIf(String::isNotEmpty)
-                    ?.let(Path::of)
-                    ?.let { if (it.isAbsolute) it else workspace.resolve(it) }
-                    ?.toAbsolutePath()
-                    ?.normalize()
-            val module =
-                sequenceOf(buildDirectory, *roots.toTypedArray())
-                    .filterNotNull()
-                    .mapNotNull { owningModule(workspace, it) }
-                    .firstOrNull()
-                    ?: error("scip-java: unable to locate Maven project directory from $path")
+        for (module in projects) {
+            require(
+                module.startsWith(workspace) && Files.isRegularFile(module.resolve("pom.xml"))
+            ) {
+                "scip-java: Maven reactor project is outside the workspace at $module"
+            }
             val target = mavenTarget(workspace, module)
             targets += target
-            for (sourceRoot in roots.distinct()) {
+            for (sourceRoot in roots.filter { it.first == module }.map { it.second }.distinct()) {
                 if (!sourceRoot.startsWith(workspace) || !Files.isDirectory(sourceRoot)) continue
                 Files.walk(sourceRoot).use { paths ->
                     paths
@@ -284,21 +268,10 @@ internal class MavenGraphGenerationStore(
         return ReactorOwnership(targets, sources, true)
     }
 
-    private fun sourceDirectory(build: org.w3c.dom.Element): String? =
-        child(build, "sourceDirectory")?.textContent?.trim()?.takeIf(String::isNotEmpty)
-
-    private fun testSourceDirectory(build: org.w3c.dom.Element): String? =
-        child(build, "testSourceDirectory")?.textContent?.trim()?.takeIf(String::isNotEmpty)
-
-    private fun owningModule(workspace: Path, input: Path): Path? {
-        var candidate = input
-        while (candidate.startsWith(workspace)) {
-            if (Files.isRegularFile(candidate.resolve("pom.xml"))) return candidate
-            if (candidate == workspace) break
-            candidate = candidate.parent ?: break
-        }
-        return null
-    }
+    private fun decodePath(value: String): Path =
+        Path.of(String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8))
+            .toAbsolutePath()
+            .normalize()
 
     private fun seenSources(): Set<String> {
         val root = staging.resolve(".seen")
@@ -390,21 +363,6 @@ internal class MavenGraphGenerationStore(
             output = next
         }
         return output
-    }
-
-    private fun ByteArray.indexOf(needle: ByteArray, fromIndex: Int = 0): Int {
-        if (needle.isEmpty()) return fromIndex.coerceAtMost(size)
-        for (index in fromIndex.coerceAtLeast(0)..size - needle.size) {
-            var matches = true
-            for (offset in needle.indices) {
-                if (this[index + offset] != needle[offset]) {
-                    matches = false
-                    break
-                }
-            }
-            if (matches) return index
-        }
-        return -1
     }
 
     private fun mavenTarget(workspace: Path, module: Path): String {
