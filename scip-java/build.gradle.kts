@@ -14,6 +14,9 @@ description = "Java and Kotlin indexer for SCIP"
 val javacShadowJar = shadowJarArtifact(":scip-javac", "javacShadowJar")
 val gradlePluginShadowJar = shadowJarArtifact(":scip-gradle-plugin", "gradlePluginShadowJar")
 val kotlincShadowJar = shadowJarArtifact(":scip-kotlinc", "kotlincShadowJar")
+evaluationDependsOn(":scip-maven-plugin")
+val mavenGraphPluginJar =
+    project(":scip-maven-plugin").tasks.named<Jar>("graphPluginJar")
 
 dependencies {
     implementation(project(":scip-aggregator"))
@@ -48,6 +51,9 @@ val generateEmbeddedResources = tasks.register<Sync>("generateEmbeddedResources"
     }
     from(kotlincShadowJar) {
         rename { "scip-kotlinc.jar" }
+    }
+    from(mavenGraphPluginJar) {
+        rename { "maven-graph-plugin.jar" }
     }
     into(layout.buildDirectory.dir("generated/resources/embedded"))
 }

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<plugin>
+  <name>scip-java graph reactor Maven plugin</name>
+  <description>Internal reactor metadata bridge for scip-java graph generation</description>
+  <groupId>org.scip-code</groupId>
+  <artifactId>scip-maven-plugin</artifactId>
+  <version>@VERSION@</version>
+  <goalPrefix>scip-graph</goalPrefix>
+  <isolatedRealm>false</isolatedRealm>
+  <inheritedByDefault>false</inheritedByDefault>
+  <requiredJavaVersion>11</requiredJavaVersion>
+  <requiredMavenVersion>3.9.5</requiredMavenVersion>
+  <mojos>
+    <mojo>
+      <goal>reactor</goal>
+      <description>Writes the effective Maven reactor selected by this invocation for graph indexing.</description>
+      <requiresDirectInvocation>false</requiresDirectInvocation>
+      <requiresProject>true</requiresProject>
+      <requiresReports>false</requiresReports>
+      <aggregator>true</aggregator>
+      <requiresOnline>false</requiresOnline>
+      <inheritedByDefault>false</inheritedByDefault>
+      <implementation>org.scip_code.scip_java.maven.ReactorWriterMojo</implementation>
+      <language>java</language>
+      <instantiationStrategy>per-lookup</instantiationStrategy>
+      <executionStrategy>once-per-session</executionStrategy>
+      <requiresDependencyResolution>none</requiresDependencyResolution>
+      <threadSafe>true</threadSafe>
+      <parameters>
+        <parameter>
+          <name>projects</name>
+          <type>java.util.List</type>
+          <required>true</required>
+          <editable>false</editable>
+          <description>The exact projects selected for this reactor.</description>
+        </parameter>
+      </parameters>
+      <configuration>
+        <projects implementation="java.util.List">${reactorProjects}</projects>
+      </configuration>
+      <requirements>
+      </requirements>
+    </mojo>
+  </mojos>
+  <dependencies>
+  </dependencies>
+</plugin>

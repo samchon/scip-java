@@ -3,6 +3,7 @@ package org.scip_code.scip_java.javac;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -60,7 +61,7 @@ public class InjectScipOptions {
         String filepath = arg.substring(1);
         Path path = Paths.get(filepath);
         if (Files.isRegularFile(path)) {
-          List<String> lines = Files.readAllLines(path);
+          List<String> lines = Files.readAllLines(path, Charset.defaultCharset());
           for (String line : lines) {
             newArgs.processArgument(line);
           }

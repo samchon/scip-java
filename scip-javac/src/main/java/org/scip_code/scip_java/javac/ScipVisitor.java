@@ -1,19 +1,26 @@
 package org.scip_code.scip_java.javac;
 
 import com.sun.source.tree.AnnotatedTypeTree;
+import com.sun.source.tree.AnnotationTree;
+import com.sun.source.tree.AssignmentTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
+import com.sun.source.tree.CompoundAssignmentTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
+import com.sun.source.tree.ImportTree;
 import com.sun.source.tree.LineMap;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
+import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
+import com.sun.source.tree.ModuleTree;
 import com.sun.source.tree.NewClassTree;
 import com.sun.source.tree.PackageTree;
 import com.sun.source.tree.ParameterizedTypeTree;
 import com.sun.source.tree.Tree;
 import com.sun.source.tree.TypeParameterTree;
+import com.sun.source.tree.UnaryTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.SourcePositions;
 import com.sun.source.util.TreePath;
@@ -67,6 +74,7 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
   private final Elements elements;
   private final CompilationUnitTree compUnitTree;
   private final ScipDocumentBuilder documentBuilder;
+  private final JavaGraphDocumentBuilder graphBuilder;
   private final ScipJavaSignatureFormatter signatureFormatter;
   private final LinkedHashMap<Tree, TreePath> nodes = new LinkedHashMap<>();
   private final LinkedHashMap<Element, Tree> declTrees = new LinkedHashMap<>();
@@ -80,7 +88,8 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
       Types types,
       Trees trees,
       Elements elements,
-      ScipDocumentBuilder documentBuilder) {
+      ScipDocumentBuilder documentBuilder,
+      JavaGraphDocumentBuilder graphBuilder) {
     this.globals = globals;
     this.locals = locals;
     this.types = types;
@@ -88,6 +97,7 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
     this.elements = elements;
     this.compUnitTree = compUnitTree;
     this.documentBuilder = documentBuilder;
+    this.graphBuilder = graphBuilder;
     this.signatureFormatter = new ScipJavaSignatureFormatter(trees, compUnitTree);
     this.source = readSource();
   }
@@ -111,10 +121,44 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
 
   @Override
   public Void visitPackage(PackageTree node, Void unused) {
+    if (graphBuilder != null
+        && compUnitTree
+            .getSourceFile()
+            .getName()
+            .replace('\\', '/')
+            .endsWith("package-info.java")) {
+      Element sym = trees.getElement(getCurrentPath());
+      if (sym != null) {
+        ScipRange range =
+            computeRange(
+                node,
+                CompilerRange.FROM_POINT_WITH_TEXT_SEARCH,
+                sym,
+                sym.getSimpleName().toString());
+        graphBuilder.declare(sym, node, range, sym.toString());
+      }
+    }
     // Skip the package subtree: TreePathScanner would otherwise recurse into the
     // package name's identifiers and emit an unwanted self-reference for
     // `package X.Y;`.
     return null;
+  }
+
+  @Override
+  public Void visitModule(ModuleTree node, Void unused) {
+    if (graphBuilder != null) {
+      Element sym = trees.getElement(getCurrentPath());
+      if (sym != null) {
+        ScipRange range =
+            computeRange(
+                node,
+                CompilerRange.FROM_POINT_WITH_TEXT_SEARCH,
+                sym,
+                sym.getSimpleName().toString());
+        graphBuilder.declare(sym, node, range, sym.toString());
+      }
+    }
+    return super.visitModule(node, unused);
   }
 
   // =======================================
@@ -152,14 +196,35 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
         resolveMemberSelectTree(memberSelectTree, entry.getValue());
       } else if (node instanceof NewClassTree newClassTree) {
         resolveNewClassTree(newClassTree, entry.getValue());
+      } else if (node instanceof MethodInvocationTree methodInvocationTree) {
+        resolveMethodInvocationTree(methodInvocationTree, entry.getValue());
+      } else if (node instanceof AnnotationTree annotationTree) {
+        resolveAnnotationTree(annotationTree, entry.getValue());
+      } else if (node instanceof ImportTree importTree) {
+        resolveImportTree(importTree, entry.getValue());
       }
     }
   }
 
   private void resolveClassTree(ClassTree node, TreePath treePath) {
     Element sym = trees.getElement(treePath);
-    if (sym != null && sym.getSimpleName().length() > 0) {
+    if (sym == null) return;
+    if (sym.getSimpleName().length() > 0) {
       emitDefinition(sym, node, sym.getSimpleName(), CompilerRange.FROM_POINT_WITH_TEXT_SEARCH);
+    }
+    if (node.getExtendsClause() != null) {
+      Element parent = trees.getElement(nodes.get(node.getExtendsClause()));
+      if (graphBuilder != null) {
+        graphBuilder.inheritance(sym, parent, node.getExtendsClause(), "extends");
+      }
+    }
+    for (Tree parentTree : node.getImplementsClause()) {
+      Element parent = trees.getElement(nodes.get(parentTree));
+      String family =
+          sym.getKind().isInterface() || sym.getKind() == ElementKind.ANNOTATION_TYPE
+              ? "extends"
+              : "implements";
+      if (graphBuilder != null) graphBuilder.inheritance(sym, parent, parentTree, family);
     }
   }
 
@@ -198,7 +263,12 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
     Name nodeName = node.getName();
     if (nodeName == null) return;
     Element sym = trees.getElement(treePath);
-    if (sym == null) return;
+    if (sym == null) {
+      if (graphBuilder != null) {
+        graphBuilder.unresolved("references", node, "analysis-error", List.of());
+      }
+      return;
+    }
     boolean isThis = nodeName.toString().equals("this");
     boolean isSuper = !isThis && nodeName.toString().equals("super");
     // exclude `this.` references but include `this(` and `super(` references
@@ -206,26 +276,50 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
     TreePath parentPath = treePath.getParentPath();
     Element parentSym = trees.getElement(parentPath);
     if (parentSym == null || parentSym.getKind() != null) {
-      emitReference(sym, node, sym.getSimpleName(), CompilerRange.FROM_START_TO_END);
+      ScipRange range =
+          emitReference(sym, node, treePath, sym.getSimpleName(), CompilerRange.FROM_START_TO_END);
+      if (sym.getKind() == ElementKind.CONSTRUCTOR
+          && parentPath != null
+          && parentPath.getLeaf() instanceof MethodInvocationTree) {
+        if (graphBuilder != null) {
+          graphBuilder.reference(sym, treePath, node, range, "calls", null);
+        }
+      }
     }
   }
 
   private void resolveMemberReferenceTree(MemberReferenceTree node, TreePath treePath) {
     Element sym = trees.getElement(treePath);
-    if (sym == null) return;
-    emitReference(sym, node, sym.getSimpleName(), CompilerRange.FROM_END_TO_SYMBOL_NAME);
+    if (sym == null) {
+      if (graphBuilder != null) {
+        graphBuilder.unresolved("references", node, "analysis-error", List.of());
+      }
+      return;
+    }
+    emitReference(sym, node, treePath, sym.getSimpleName(), CompilerRange.FROM_END_TO_SYMBOL_NAME);
   }
 
   private void resolveMemberSelectTree(MemberSelectTree node, TreePath treePath) {
     Element sym = trees.getElement(treePath);
-    if (sym == null) return;
-    emitReference(sym, node, sym.getSimpleName(), CompilerRange.FROM_END_TO_SYMBOL_NAME);
+    if (sym == null) {
+      if (graphBuilder != null) {
+        graphBuilder.unresolved("references", node, "analysis-error", List.of());
+      }
+      return;
+    }
+    emitReference(sym, node, treePath, sym.getSimpleName(), CompilerRange.FROM_END_TO_SYMBOL_NAME);
   }
 
   private void resolveNewClassTree(NewClassTree node, TreePath treePath) {
-    if (node.getIdentifier() == null || node.getClassBody() != null) return;
+    if (node.getIdentifier() == null) return;
     Element sym = trees.getElement(treePath);
-    if (sym == null) return;
+    if (sym == null) {
+      if (graphBuilder != null) {
+        graphBuilder.unresolved("calls", node, "analysis-error", List.of());
+        graphBuilder.unresolved("instantiates", node, "analysis-error", List.of());
+      }
+      return;
+    }
     TreePath parentPath = treePath.getParentPath();
     Element parentSym = trees.getElement(parentPath);
     if (parentSym != null && parentSym.getKind() == ElementKind.ENUM_CONSTANT) return;
@@ -233,15 +327,75 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
     TreePath identifierTreePath = nodes.get(node.getIdentifier());
     Element identifierSym = trees.getElement(identifierTreePath);
     if (identifierSym != null) {
-      emitReference(sym, node, identifierSym.getSimpleName(), CompilerRange.FROM_TEXT_SEARCH);
+      ScipRange range =
+          node.getClassBody() == null
+              ? emitReference(
+                  sym,
+                  node,
+                  treePath,
+                  identifierSym.getSimpleName(),
+                  CompilerRange.FROM_TEXT_SEARCH)
+              : computeRange(
+                  node,
+                  CompilerRange.FROM_TEXT_SEARCH,
+                  sym,
+                  identifierSym.getSimpleName().toString());
+      if (graphBuilder != null) {
+        graphBuilder.reference(sym, treePath, node, range, "calls", null);
+        graphBuilder.reference(identifierSym, treePath, node, range, "instantiates", null);
+      }
+      if (node.getClassBody() != null) {
+        TreePath anonymousPath = nodes.get(node.getClassBody());
+        Element anonymous = anonymousPath == null ? null : trees.getElement(anonymousPath);
+        if (anonymous != null && graphBuilder != null) {
+          graphBuilder.declare(
+              anonymous,
+              node.getClassBody(),
+              range,
+              "anonymous " + node.getIdentifier().toString());
+        }
+      }
     } else if (node.getIdentifier().getKind() == Tree.Kind.ANNOTATED_TYPE) {
       AnnotatedTypeTree annotatedTypeTree = (AnnotatedTypeTree) node.getIdentifier();
       if (annotatedTypeTree.getUnderlyingType() != null
           && annotatedTypeTree.getUnderlyingType().getKind() == Tree.Kind.IDENTIFIER) {
         IdentifierTree ident = (IdentifierTree) annotatedTypeTree.getUnderlyingType();
-        emitReference(sym, ident, ident.getName(), CompilerRange.FROM_TEXT_SEARCH);
+        ScipRange range =
+            emitReference(
+                sym, ident, nodes.get(ident), ident.getName(), CompilerRange.FROM_TEXT_SEARCH);
+        if (graphBuilder != null) {
+          graphBuilder.reference(sym, treePath, node, range, "calls", null);
+          graphBuilder.reference(
+              trees.getElement(nodes.get(ident)), treePath, node, range, "instantiates", null);
+        }
+      }
+    } else {
+      if (graphBuilder != null) {
+        graphBuilder.unresolved("instantiates", node, "analysis-error", List.of());
       }
     }
+  }
+
+  private void resolveMethodInvocationTree(MethodInvocationTree node, TreePath treePath) {
+    Element sym = trees.getElement(treePath);
+    ScipRange range = computeRange(node, CompilerRange.FROM_START_TO_END, sym, null);
+    if (graphBuilder != null) graphBuilder.reference(sym, treePath, node, range, "calls", null);
+  }
+
+  private void resolveAnnotationTree(AnnotationTree node, TreePath treePath) {
+    TreePath annotationType = nodes.get(node.getAnnotationType());
+    Element sym = annotationType == null ? null : trees.getElement(annotationType);
+    ScipRange range = computeRange(node, CompilerRange.FROM_START_TO_END, sym, null);
+    if (graphBuilder != null) {
+      graphBuilder.reference(sym, treePath, node, range, "decorates", null);
+    }
+  }
+
+  private void resolveImportTree(ImportTree node, TreePath treePath) {
+    TreePath qualified = nodes.get(node.getQualifiedIdentifier());
+    Element sym = qualified == null ? null : trees.getElement(qualified);
+    ScipRange range = computeRange(node, CompilerRange.FROM_START_TO_END, sym, null);
+    if (graphBuilder != null) graphBuilder.reference(sym, treePath, node, range, "imports", null);
   }
 
   // =======================================
@@ -253,13 +407,22 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
     emitOccurrence(sym, range, SymbolRole.Definition_VALUE, computeEnclosingRange(tree));
     declTrees.put(sym, tree);
     emitSymbolInformation(sym, tree);
+    if (graphBuilder != null) {
+      graphBuilder.declare(sym, tree, range, signatureFormatter.format(sym, tree));
+    }
     return range;
   }
 
-  private void emitReference(Element sym, Tree tree, Name name, CompilerRange kind) {
+  private ScipRange emitReference(
+      Element sym, Tree tree, TreePath treePath, Name name, CompilerRange kind) {
     ScipRange range = computeRange(tree, kind, sym, name == null ? null : name.toString());
-    if (range == null) return;
+    if (range == null) return null;
     emitOccurrence(sym, range, 0 /* reference */, null);
+    if (graphBuilder != null) {
+      graphBuilder.reference(
+          sym, treePath, tree, range, referenceFamily(sym), accessMode(treePath));
+    }
+    return range;
   }
 
   private void emitOccurrence(Element sym, ScipRange range, int role, ScipRange enclosingRange) {
@@ -318,6 +481,12 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
       }
     } else if (sym instanceof ExecutableElement executableElement
         && sym.getKind() == ElementKind.METHOD) {
+      if (graphBuilder != null) {
+        for (ExecutableElement overridden :
+            overriddenElements(executableElement, sym.getEnclosingElement(), new HashSet<>())) {
+          graphBuilder.override(sym, overridden, tree);
+        }
+      }
       for (String overridden :
           overriddenSymbols(executableElement, sym.getEnclosingElement(), new HashSet<>())) {
         if (overridden.isEmpty()) continue;
@@ -500,6 +669,65 @@ final class ScipVisitor extends TreePathScanner<Void, Void> {
       if (!methodFound) overriddenSymbols(sym, superElement, out);
     }
     return out;
+  }
+
+  private Set<ExecutableElement> overriddenElements(
+      ExecutableElement sym, Element enclosingElement, Set<ExecutableElement> out) {
+    if (!(enclosingElement instanceof TypeElement)) return out;
+    for (TypeMirror superType : types.directSupertypes(enclosingElement.asType())) {
+      if (!(superType instanceof DeclaredType declaredType)) continue;
+      Element superElement = declaredType.asElement();
+      if (!(superElement instanceof TypeElement)) continue;
+      boolean methodFound = false;
+      for (Element enclosed : superElement.getEnclosedElements()) {
+        if (!(enclosed instanceof ExecutableElement candidate)) continue;
+        if (!elements.overrides(sym, candidate, (TypeElement) sym.getEnclosingElement())) continue;
+        out.add(candidate);
+        methodFound = true;
+        overriddenElements(candidate, superElement, out);
+      }
+      if (!methodFound) overriddenElements(sym, superElement, out);
+    }
+    return out;
+  }
+
+  private static String referenceFamily(Element sym) {
+    if (sym == null) return "references";
+    return switch (sym.getKind()) {
+      case CLASS, RECORD, INTERFACE, ANNOTATION_TYPE, ENUM, TYPE_PARAMETER -> "type_ref";
+      case FIELD,
+          ENUM_CONSTANT,
+          PARAMETER,
+          LOCAL_VARIABLE,
+          EXCEPTION_PARAMETER,
+          RESOURCE_VARIABLE,
+          BINDING_VARIABLE ->
+          "accesses";
+      default -> "references";
+    };
+  }
+
+  private static String accessMode(TreePath treePath) {
+    if (treePath == null) return null;
+    TreePath parentPath = treePath.getParentPath();
+    if (parentPath == null) return "read";
+    Tree parent = parentPath.getLeaf();
+    if (parent instanceof AssignmentTree assignment
+        && assignment.getVariable() == treePath.getLeaf()) {
+      return "write";
+    }
+    if (parent instanceof CompoundAssignmentTree assignment
+        && assignment.getVariable() == treePath.getLeaf()) {
+      return "readwrite";
+    }
+    if (parent instanceof UnaryTree unary) {
+      return switch (unary.getKind()) {
+        case PREFIX_INCREMENT, PREFIX_DECREMENT, POSTFIX_INCREMENT, POSTFIX_DECREMENT ->
+            "readwrite";
+        default -> "read";
+      };
+    }
+    return "read";
   }
 
   // =======================================

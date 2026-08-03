@@ -3,6 +3,7 @@ package org.scip_code.scip_java.buildtools
 import java.nio.file.Files
 import java.nio.file.Path
 import org.scip_code.scip_java.commands.AggregateRunner
+import org.scip_code.scip_java.commands.GraphAggregateRunner
 import org.scip_code.scip_java.commands.IndexCommand
 
 /** A build tool such as Gradle, Maven or Bazel. */
@@ -42,15 +43,23 @@ abstract class BuildTool(val name: String, protected val index: IndexCommand) {
         ): Int {
             if (!Files.isDirectory(targetroot)) return generateScipResult.exitCode
             if (generateScipResult.exitCode != 0) return generateScipResult.exitCode
-            return AggregateRunner.run(
-                output = index.finalOutput,
+            val aggregate =
+                AggregateRunner.run(
+                    output = index.finalOutput,
+                    targetroots = listOf(targetroot),
+                    app = index.app,
+                    parallel = index.aggregateParallel,
+                    emitInverseRelationships = index.aggregateEmitInverseRelationships,
+                    allowEmptyIndex = index.aggregateAllowEmptyIndex,
+                    allowExportingGlobalSymbolsFromDirectoryEntries =
+                        index.aggregateAllowExportingGlobalSymbolsFromDirectoryEntries,
+                )
+            if (aggregate != 0) return aggregate
+            val graphOutput = index.graphOutput ?: return 0
+            return GraphAggregateRunner.run(
+                output = graphOutput,
                 targetroots = listOf(targetroot),
                 app = index.app,
-                parallel = index.aggregateParallel,
-                emitInverseRelationships = index.aggregateEmitInverseRelationships,
-                allowEmptyIndex = index.aggregateAllowEmptyIndex,
-                allowExportingGlobalSymbolsFromDirectoryEntries =
-                    index.aggregateAllowExportingGlobalSymbolsFromDirectoryEntries,
             )
         }
     }

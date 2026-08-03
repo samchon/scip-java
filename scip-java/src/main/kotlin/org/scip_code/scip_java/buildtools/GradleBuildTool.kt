@@ -10,7 +10,8 @@ import org.scip_code.scip_java.commands.IndexCommand
 class GradleBuildTool(index: IndexCommand) : BuildTool("Gradle", index) {
 
     override fun usedInCurrentDirectory(): Boolean {
-        val gradleFiles = listOf("settings.gradle", "gradlew", "build.gradle", "build.gradle.kts")
+        val gradleFiles =
+            listOf("settings.gradle", "gradlew", "gradlew.bat", "build.gradle", "build.gradle.kts")
         return gradleFiles.any { name -> Files.isRegularFile(index.workingDirectory.resolve(name)) }
     }
 
@@ -75,8 +76,11 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
 
     private fun runBuild(): ProcessResult {
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
+        val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
         val gradleCommand =
-            if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper))
+            if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper))
+                windowsWrapper.toString()
+            else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper))
                 gradleWrapper.toString()
             else "gradle"
         return TemporaryFiles.withDirectory(index) { tmp -> runCompileCommand(tmp, gradleCommand) }
@@ -86,14 +90,25 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val script = initScript(tmp).toString()
         val cmd = mutableListOf<String>()
         cmd += gradleCommand
-        cmd += "--no-daemon"
+        if (index.graphOutput == null) cmd += "--no-daemon"
         cmd += "--init-script"
         cmd += script
-        cmd += "-Pkotlin.compiler.execution.strategy=in-process"
         cmd += "-Dscip.targetroot=${targetroot()}"
-        cmd += index.finalBuildCommand(listOf("clean", "scipPrintDependencies", "scipCompileAll"))
+        if (index.graphOutput == null) cmd += "-Pkotlin.compiler.execution.strategy=in-process"
+        val defaults =
+            if (index.graphOutput == null)
+                listOf("clean", "scipPrintDependencies", "scipCompileAll")
+            else listOf("scipPrintDependencies", "scipCompileAll")
+        val buildCommand = index.finalBuildCommand(defaults)
+        cmd += buildCommand
+        if (
+            index.graphOutput != null &&
+                buildCommand.none { it.substringAfterLast(':') == "scipCommitJavaGraph" }
+        ) {
+            cmd += "scipCommitJavaGraph"
+        }
 
-        targetroot().toFile().deleteRecursively()
+        if (index.graphOutput == null) targetroot().toFile().deleteRecursively()
         val result = index.app.runProcess(cmd, env = mapOf("TERM" to "dumb"))
         return Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: result
     }
@@ -109,17 +124,18 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             """
              initscript {
                  dependencies{ 
-                     classpath(files("${gradlePluginPath}"))
+                     classpath(files(${groovyString(gradlePluginPath.toString())}))
                  }
              }
 
              import org.scip_code.scip_java.gradle.ScipGradlePlugin
 
              allprojects {
-               project.ext["scipTarget"] = "${targetroot()}"
-               project.ext["javacPluginJar"] = "$pluginpath"
-               project.ext["dependenciesOut"] = "$dependenciesPath"
-               project.ext["scipKotlincJar"] = "$scipKotlincPath"
+               project.ext["scipTarget"] = ${groovyString(targetroot().toString())}
+               project.ext["javacPluginJar"] = ${groovyString(pluginpath.toString())}
+               project.ext["dependenciesOut"] = ${groovyString(dependenciesPath.toString())}
+               project.ext["scipKotlincJar"] = ${groovyString(scipKotlincPath.toString())}
+               project.ext["scipGraphEnabled"] = ${index.graphOutput != null}
                apply plugin: ScipGradlePlugin
              }
             """
@@ -129,4 +145,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         Files.write(out, script.toByteArray(StandardCharsets.UTF_8))
         return out
     }
+
+    private fun groovyString(value: String): String =
+        "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 }
