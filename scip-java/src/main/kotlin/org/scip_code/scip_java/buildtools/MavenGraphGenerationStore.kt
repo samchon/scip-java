@@ -9,7 +9,10 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.HexFormat
+import javax.xml.XMLConstants
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -21,6 +24,7 @@ internal class MavenGraphGenerationStore(
     private val sourceRoot: Path,
     private val target: String,
 ) {
+    private val declaredSourcesFile = "DECLARED_SOURCES"
     private val sha256 = Regex("[0-9a-f]{64}")
     private val targetRoot = targetRoot.toAbsolutePath().normalize()
     private val storeRoot = this.targetRoot.resolve("META-INF/scip-graph-store")
@@ -44,14 +48,25 @@ internal class MavenGraphGenerationStore(
 
     /** Reconcile deleted sources and publish only after Maven completed successfully. */
     fun commit() {
+        val ownership = reactorOwnership()
+        val previouslyDeclared = readLines(staging.resolve(declaredSourcesFile))
+        val seenSources = seenSources()
         val shards = graphShards(staging)
         for (shard in shards) {
-            val source = shardSource(shard)
-            val sourcePath = Path.of(source)
+            val metadata = shardMetadata(shard)
+            val sourcePath = Path.of(metadata.source)
             val absolute =
                 if (sourcePath.isAbsolute) sourcePath.normalize()
                 else sourceRoot.toAbsolutePath().normalize().resolve(sourcePath).normalize()
-            if (!Files.isRegularFile(absolute)) Files.deleteIfExists(shard)
+            val declared = declaredSource(metadata.target, metadata.source)
+            if (
+                metadata.source !in seenSources &&
+                    ((ownership.complete && metadata.target !in ownership.targets) ||
+                        (declared in previouslyDeclared && declared !in ownership.sources) ||
+                        !Files.isRegularFile(absolute))
+            ) {
+                Files.deleteIfExists(shard)
+            }
         }
         deleteTree(staging.resolve(".seen"))
         deleteEmptyDirectories(staging)
@@ -62,6 +77,10 @@ internal class MavenGraphGenerationStore(
         reconcileCompilerUniverses(targets)
         writeAtomic(staging.resolve("TARGETS"), targets)
         writeAtomic(staging.resolve("SOURCES"), active)
+        writeAtomic(
+            staging.resolve(declaredSourcesFile),
+            ownership.sources.sortedWith(::compareUtf8),
+        )
         writeAtomic(staging.resolve("UNIVERSE"), universe())
 
         val generation = generationDigest(staging)
@@ -90,8 +109,6 @@ internal class MavenGraphGenerationStore(
         return committed
     }
 
-    private fun shardSource(shard: Path): String = shardMetadata(shard).source
-
     private fun shardMetadata(shard: Path): ShardMetadata {
         val parsed =
             runCatching { Json.parseToJsonElement(Files.readString(shard)).jsonObject }
@@ -116,6 +133,174 @@ internal class MavenGraphGenerationStore(
         }
         return ShardMetadata(source, shardTarget, diskDigest)
     }
+
+    /**
+     * Current Maven-owned source files, separated from compiler-generated files. A prior declared
+     * source that leaves the reactor or its configured source root is removed even while the file
+     * remains on disk; generated sources retain the existing last-good behavior.
+     */
+    private fun reactorOwnership(): ReactorOwnership {
+        val workspace = sourceRoot.toAbsolutePath().normalize()
+        val modules = linkedSetOf<Path>()
+        var complete = true
+
+        fun visit(module: Path) {
+            val normalized = module.toAbsolutePath().normalize()
+            if (!normalized.startsWith(workspace) || !modules.add(normalized)) return
+            val pom = normalized.resolve("pom.xml")
+            if (!Files.isRegularFile(pom)) return
+            val root = parsePom(pom)
+            val properties = mutableMapOf("basedir" to normalized.toString())
+            properties["project.basedir"] = normalized.toString()
+            child(root, "properties")?.childNodes?.let { nodes ->
+                for (index in 0 until nodes.length) {
+                    val node = nodes.item(index)
+                    if (node.nodeType == org.w3c.dom.Node.ELEMENT_NODE) {
+                        properties[node.nodeName] = node.textContent.orEmpty().trim()
+                    }
+                }
+            }
+            val moduleNodes = root.getElementsByTagName("module")
+            for (index in 0 until moduleNodes.length) {
+                val node = moduleNodes.item(index)
+                if (node.parentNode?.nodeName != "modules") continue
+                val value = interpolate(node.textContent.orEmpty().trim(), properties)
+                if (value.contains("\${")) {
+                    complete = false
+                } else if (value.isNotEmpty()) {
+                    visit(normalized.resolve(value))
+                }
+            }
+        }
+        visit(workspace)
+
+        val targets = linkedSetOf<String>()
+        val sources = linkedSetOf<String>()
+        for (module in modules) {
+            val target = mavenTarget(workspace, module)
+            targets += target
+            val pom = module.resolve("pom.xml")
+            val configured =
+                if (Files.isRegularFile(pom)) configuredSourceRoots(parsePom(pom), module)
+                else emptyList()
+            val roots =
+                if (configured.isEmpty())
+                    listOf(module.resolve("src/main/java"), module.resolve("src/test/java"))
+                else configured
+            for (root in roots.distinct()) {
+                val normalized = root.toAbsolutePath().normalize()
+                if (!normalized.startsWith(workspace) || !Files.isDirectory(normalized)) continue
+                Files.walk(normalized).use { paths ->
+                    paths
+                        .filter(Files::isRegularFile)
+                        .filter { it.fileName.toString().endsWith(".java") }
+                        .forEach { source ->
+                            val relative =
+                                workspace
+                                    .relativize(source.toAbsolutePath().normalize())
+                                    .toString()
+                                    .replace('\\', '/')
+                            sources += declaredSource(target, relative)
+                        }
+                }
+            }
+        }
+        return ReactorOwnership(targets, sources, complete)
+    }
+
+    private fun seenSources(): Set<String> {
+        val root = staging.resolve(".seen")
+        if (!Files.isDirectory(root)) return emptySet()
+        return Files.walk(root).use { paths ->
+            paths
+                .filter(Files::isRegularFile)
+                .map(root::relativize)
+                .map(Path::toString)
+                .map { it.replace('\\', '/').removeSuffix(".seen") }
+                .toList()
+                .toSet()
+        }
+    }
+
+    private fun configuredSourceRoots(root: org.w3c.dom.Element, module: Path): List<Path> {
+        val build = child(root, "build") ?: return emptyList()
+        val properties = mutableMapOf("basedir" to module.toString())
+        properties["project.basedir"] = module.toString()
+        child(root, "properties")?.childNodes?.let { nodes ->
+            for (index in 0 until nodes.length) {
+                val node = nodes.item(index)
+                if (node.nodeType == org.w3c.dom.Node.ELEMENT_NODE) {
+                    properties[node.nodeName] = node.textContent.orEmpty().trim()
+                }
+            }
+        }
+        return listOf(
+                child(build, "sourceDirectory")?.textContent.orEmpty().trim().ifEmpty {
+                    "src/main/java"
+                },
+                child(build, "testSourceDirectory")?.textContent.orEmpty().trim().ifEmpty {
+                    "src/test/java"
+                },
+            )
+            .map { interpolate(it, properties) }
+            .map { value -> Path.of(value).let { if (it.isAbsolute) it else module.resolve(it) } }
+    }
+
+    private fun parsePom(pom: Path): org.w3c.dom.Element {
+        val factory =
+            DocumentBuilderFactory.newInstance().apply {
+                isNamespaceAware = false
+                isValidating = false
+                setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+                setFeature("http://xml.org/sax/features/external-general-entities", false)
+                setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+                setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+                setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
+                isXIncludeAware = false
+                isExpandEntityReferences = false
+            }
+        return Files.newInputStream(pom).use {
+            factory.newDocumentBuilder().parse(it).documentElement
+        }
+    }
+
+    private fun child(parent: org.w3c.dom.Element, name: String): org.w3c.dom.Element? {
+        val nodes = parent.childNodes
+        for (index in 0 until nodes.length) {
+            val node = nodes.item(index)
+            if (node.nodeType == org.w3c.dom.Node.ELEMENT_NODE && node.nodeName == name) {
+                return node as org.w3c.dom.Element
+            }
+        }
+        return null
+    }
+
+    private fun interpolate(value: String, properties: Map<String, String>): String {
+        var output = value
+        repeat(8) {
+            val next =
+                Regex("\\$\\{([^}]+)}").replace(output) { match ->
+                    properties[match.groupValues[1]] ?: match.value
+                }
+            if (next == output) return output
+            output = next
+        }
+        return output
+    }
+
+    private fun mavenTarget(workspace: Path, module: Path): String {
+        val relative = workspace.relativize(module).toString().replace('\\', '/')
+        return "maven:${relative.ifEmpty { "." }}"
+    }
+
+    private fun declaredSource(target: String, source: String): String =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(target.toByteArray(StandardCharsets.UTF_8)) + " " + source
+
+    private fun readLines(path: Path): Set<String> =
+        if (Files.isRegularFile(path)) Files.readAllLines(path, StandardCharsets.UTF_8).toSet()
+        else emptySet()
 
     private fun validateSource(metadata: ShardMetadata) {
         if (metadata.diskDigest.isEmpty()) return
@@ -322,4 +507,10 @@ internal class MavenGraphGenerationStore(
         )
 
     private data class ShardMetadata(val source: String, val target: String, val diskDigest: String)
+
+    private data class ReactorOwnership(
+        val targets: Set<String>,
+        val sources: Set<String>,
+        val complete: Boolean,
+    )
 }

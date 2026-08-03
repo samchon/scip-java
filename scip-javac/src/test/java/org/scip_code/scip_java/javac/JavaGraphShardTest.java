@@ -259,11 +259,34 @@ class JavaGraphShardTest {
         """
         package example;
         public class Example {
-          void work() { { int value = 1; } { int value = 2; } }
+          void work() { { int value = 1; } { int value = 1; } }
         }
         """;
     String json = compile(root, source);
     assertEquals(2, count(json, "\"name\":\"value\""));
+    assertEquals(2, symbolsFor(json, "value").stream().distinct().count());
+  }
+
+  @Test
+  void identicalSiblingIdentityIgnoresUnrelatedStatements(@TempDir Path root) {
+    String original =
+        """
+        package example;
+        public class Example {
+          void work() { { int value = 1; } { int value = 1; } }
+        }
+        """;
+    String changed =
+        """
+        package example;
+        public class Example {
+          void work() { int unrelated = 0; { int value = 1; } { int value = 1; } }
+        }
+        """;
+
+    assertEquals(
+        symbolsFor(compile(root.resolve("first"), original), "value"),
+        symbolsFor(compile(root.resolve("second"), changed), "value"));
   }
 
   @Test
@@ -363,6 +386,18 @@ class JavaGraphShardTest {
     Matcher matcher = pattern.matcher(json);
     assertTrue(matcher.find(), () -> "missing node " + name + " in:\n" + json);
     return matcher.group(1);
+  }
+
+  private static List<String> symbolsFor(String json, String name) {
+    Pattern pattern =
+        Pattern.compile(
+            "\\{\\\"symbol\\\":\\\"([^\\\"]+)\\\",[^{}]*\\\"name\\\":\\\""
+                + Pattern.quote(name)
+                + "\\\"");
+    Matcher matcher = pattern.matcher(json);
+    List<String> result = new java.util.ArrayList<>();
+    while (matcher.find()) result.add(matcher.group(1));
+    return result;
   }
 
   private static int count(String text, String needle) {

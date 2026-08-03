@@ -115,6 +115,16 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
                 ),
                 artifactSources(artifact),
             )
+
+            val rootPom = workspace.resolve("pom.xml")
+            Files.writeString(
+                rootPom,
+                Files.readString(rootPom).replace("<module>module-b</module>", ""),
+            )
+            assertEquals(0, runScipJava(workspace, arguments).first)
+            assertEquals(listOf("maven:module-a"), artifactTargets(artifact))
+            assertEquals(listOf("module-a/src/main/java/example/A.java"), artifactSources(artifact))
+            assertTrue(Files.isRegularFile(renamed))
         } finally {
             base.toFile().deleteRecursively()
         }

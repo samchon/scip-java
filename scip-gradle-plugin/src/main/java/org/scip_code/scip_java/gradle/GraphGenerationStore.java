@@ -29,6 +29,7 @@ import org.gradle.api.tasks.compile.JavaCompile;
 final class GraphGenerationStore {
   private static final String SHARD_SUFFIX = ".graph.json";
   private static final String SEEN_ROOT = ".seen";
+  private static final String DECLARED_SOURCES = "DECLARED_SOURCES";
   private static final java.util.regex.Pattern SHA256 =
       java.util.regex.Pattern.compile("[0-9a-f]{64}");
 
@@ -87,10 +88,12 @@ final class GraphGenerationStore {
 
   void commit(Set<java.io.File> taskSources, List<String> universe) {
     try {
-      Set<String> active = new LinkedHashSet<>();
+      Set<String> declared = new LinkedHashSet<>();
       for (java.io.File source : taskSources) {
-        active.add(relativeSource(source.toPath().toAbsolutePath().normalize()));
+        declared.add(relativeSource(source.toPath().toAbsolutePath().normalize()));
       }
+      Set<String> active = new LinkedHashSet<>(declared);
+      Set<String> previouslyDeclared = readLines(staging.resolve(DECLARED_SOURCES));
       Path seen = staging.resolve(SEEN_ROOT);
       if (Files.isDirectory(seen)) {
         try (var paths = Files.walk(seen)) {
@@ -107,7 +110,10 @@ final class GraphGenerationStore {
       List<Path> shards = graphShards(staging);
       for (Path shard : shards) {
         String source = shardSource(staging.relativize(shard));
-        if (!active.contains(source) && !sourceExists(source)) Files.deleteIfExists(shard);
+        if (!active.contains(source)
+            && (previouslyDeclared.contains(source) || !sourceExists(source))) {
+          Files.deleteIfExists(shard);
+        }
       }
       deleteEmptyDirectories(staging);
       deleteTree(staging.resolve(SEEN_ROOT));
@@ -128,6 +134,9 @@ final class GraphGenerationStore {
       orderedSources = new ArrayList<>(new LinkedHashSet<>(orderedSources));
       orderedSources.sort(GraphGenerationStore::compareUtf8);
       writeAtomic(staging.resolve("SOURCES"), orderedSources);
+      List<String> orderedDeclared = new ArrayList<>(declared);
+      orderedDeclared.sort(GraphGenerationStore::compareUtf8);
+      writeAtomic(staging.resolve(DECLARED_SOURCES), orderedDeclared);
       if (universe != null) writeAtomic(staging.resolve("UNIVERSE"), universe);
       if (!Files.isRegularFile(staging.resolve("UNIVERSE"))) {
         writeAtomic(
@@ -155,32 +164,45 @@ final class GraphGenerationStore {
   }
 
   List<String> universe(JavaCompile task) {
+    List<String> rows = new ArrayList<>();
+    rows.add("java.version=" + System.getProperty("java.version", ""));
+    rows.add("java.home=" + normalizedPath(Path.of(System.getProperty("java.home", ""))));
+    rows.add("sourceCompatibility=" + task.getSourceCompatibility());
+    rows.add("targetCompatibility=" + task.getTargetCompatibility());
+    rows.add("encoding=" + String.valueOf(task.getOptions().getEncoding()));
+    Integer release = task.getOptions().getRelease().getOrNull();
+    rows.add("release=" + String.valueOf(release));
+    List<?> compilerArgs = task.getOptions().getCompilerArgs();
+    for (int index = 0; index < compilerArgs.size(); index++) {
+      rows.add("compilerArg[" + index + "]=" + String.valueOf(compilerArgs.get(index)));
+    }
+    List<String> inputs =
+        task.getInputs().getFiles().getFiles().stream()
+            .map(java.io.File::toPath)
+            .map(Path::toAbsolutePath)
+            .map(Path::normalize)
+            .map(this::universeInputUnchecked)
+            .sorted(GraphGenerationStore::compareUtf8)
+            .toList();
+    for (String input : inputs) rows.add("input=" + input);
+    return rows;
+  }
+
+  String universeInput(Path input) throws IOException {
+    Path normalized = input.toAbsolutePath().normalize();
+    String digest = fileDigest(normalized);
+    String identity =
+        normalized.startsWith(sourceRoot)
+            ? normalizedPath(normalized)
+            : "external/" + normalized.getFileName();
+    return identity + ":" + digest;
+  }
+
+  private String universeInputUnchecked(Path input) {
     try {
-      List<String> rows = new ArrayList<>();
-      rows.add("java.version=" + System.getProperty("java.version", ""));
-      rows.add("java.home=" + normalizedPath(Path.of(System.getProperty("java.home", ""))));
-      rows.add("sourceCompatibility=" + task.getSourceCompatibility());
-      rows.add("targetCompatibility=" + task.getTargetCompatibility());
-      rows.add("encoding=" + String.valueOf(task.getOptions().getEncoding()));
-      Integer release = task.getOptions().getRelease().getOrNull();
-      rows.add("release=" + String.valueOf(release));
-      List<?> compilerArgs = task.getOptions().getCompilerArgs();
-      for (int index = 0; index < compilerArgs.size(); index++) {
-        rows.add("compilerArg[" + index + "]=" + String.valueOf(compilerArgs.get(index)));
-      }
-      List<Path> inputs =
-          task.getInputs().getFiles().getFiles().stream()
-              .map(java.io.File::toPath)
-              .map(Path::toAbsolutePath)
-              .map(Path::normalize)
-              .sorted(Comparator.comparing(this::normalizedPath, GraphGenerationStore::compareUtf8))
-              .toList();
-      for (Path input : inputs) {
-        rows.add("input=" + normalizedPath(input) + ":" + fileDigest(input));
-      }
-      return rows;
+      return universeInput(input);
     } catch (IOException exception) {
-      throw new UncheckedIOException("scip-java: unable to capture Java graph universe", exception);
+      throw new UncheckedIOException(exception);
     }
   }
 
@@ -311,6 +333,12 @@ final class GraphGenerationStore {
           .sorted()
           .toList();
     }
+  }
+
+  private static Set<String> readLines(Path input) throws IOException {
+    return Files.isRegularFile(input)
+        ? new LinkedHashSet<>(Files.readAllLines(input, StandardCharsets.UTF_8))
+        : Set.of();
   }
 
   private static String generationDigest(Path root) throws IOException {

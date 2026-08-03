@@ -110,6 +110,47 @@ class GraphGenerationStoreTest {
                 .resolve("build/generated/Generated.java.graph.json")));
   }
 
+  @Test
+  void removesADeclaredSourceThatLeavesTheTaskWithoutDeletingIt(@TempDir Path root)
+      throws IOException {
+    Path sources = root.resolve("project");
+    Path target = root.resolve("target");
+    Path excluded = sources.resolve("src/Excluded.java");
+    Files.createDirectories(excluded.getParent());
+    Files.writeString(excluded, "class Excluded {}\n");
+    GraphGenerationStore store = new GraphGenerationStore(target, sources, ":compileJava");
+
+    store.prepare();
+    replace(
+        store.staging().resolve("src/Excluded.java.graph.json"),
+        shard("src/Excluded.java", ":compileJava"));
+    marker(store.staging(), "src/Excluded.java");
+    store.commit(Set.of(excluded.toFile()));
+
+    store.prepare();
+    store.commit(Set.of());
+    Path committed = committed(store.outputRoot(), current(store.outputRoot()));
+    assertTrue(Files.isRegularFile(excluded));
+    assertFalse(Files.exists(committed.resolve("src/Excluded.java.graph.json")));
+  }
+
+  @Test
+  void externalTaskInputsUseContentIdentityInsteadOfTemporaryDirectories(@TempDir Path root)
+      throws IOException {
+    GraphGenerationStore store =
+        new GraphGenerationStore(root.resolve("target"), root.resolve("project"), ":compileJava");
+    Path first = root.resolve("first-random/scip-plugin.jar");
+    Path second = root.resolve("second-random/scip-plugin.jar");
+    Files.createDirectories(first.getParent());
+    Files.createDirectories(second.getParent());
+    Files.writeString(first, "same embedded plugin\n");
+    Files.writeString(second, "same embedded plugin\n");
+
+    assertEquals(store.universeInput(first), store.universeInput(second));
+    Files.writeString(second, "different embedded plugin\n");
+    assertNotEquals(store.universeInput(first), store.universeInput(second));
+  }
+
   private static void marker(Path staging, String source) throws IOException {
     Path marker = staging.resolve(".seen").resolve(source + ".seen");
     Files.createDirectories(marker.getParent());

@@ -49,7 +49,7 @@ class MavenGraphGenerationStoreTest {
             val replacement = workspace.resolve("src/B.java")
             write(replacement, "class B {}\n")
             store.prepare()
-            write(store.staging.resolve("src/B.java.graph.json"), shard("maven:sub", "src/B.java"))
+            write(store.staging.resolve("src/B.java.graph.json"), shard("maven:.", "src/B.java"))
             store.commit()
             val second = Files.readString(store.current)
             assertNotEquals(first, second)
@@ -57,8 +57,36 @@ class MavenGraphGenerationStoreTest {
             assertFalse(Files.exists(committed.resolve("src/A.java.graph.json")))
             assertTrue(Files.isRegularFile(committed.resolve("src/B.java.graph.json")))
             assertEquals(listOf("src/B.java"), Files.readAllLines(committed.resolve("SOURCES")))
-            assertEquals(listOf("maven:sub"), Files.readAllLines(committed.resolve("TARGETS")))
+            assertEquals(listOf("maven:."), Files.readAllLines(committed.resolve("TARGETS")))
             assertEquals(1, Files.list(committed.parent).use { it.count() })
+        }
+    }
+
+    @Test
+    fun removesAReactorModuleWithoutDeletingItsSources() {
+        withWorkspace { workspace ->
+            val rootPom = workspace.resolve("pom.xml")
+            write(rootPom, "<project><modules><module>sub</module></modules></project>\n")
+            write(workspace.resolve("sub/pom.xml"), "<project/>\n")
+            val source = workspace.resolve("sub/src/main/java/B.java")
+            write(source, "class B {}\n")
+            val store =
+                MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
+            store.prepare()
+            write(
+                store.staging.resolve("sub/src/main/java/B.java.graph.json"),
+                shard("maven:sub", "sub/src/main/java/B.java"),
+            )
+            store.commit()
+
+            write(rootPom, "<project/>\n")
+            store.prepare()
+            store.commit()
+            val generation = Files.readString(store.current).trim()
+            val committed = store.current.parent.resolve("generations").resolve(generation)
+            assertTrue(Files.isRegularFile(source))
+            assertEquals("", Files.readString(committed.resolve("SOURCES")))
+            assertFalse(Files.exists(committed.resolve("sub/src/main/java/B.java.graph.json")))
         }
     }
 

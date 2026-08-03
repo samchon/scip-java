@@ -25,6 +25,11 @@ class GraphAggregateRunnerTest {
     fun aggregatesOnlyCommittedGenerationsDeterministically() {
         withWorkspace { workspace, app, _ ->
             val targetroot = workspace.resolve("targetroot")
+            write(
+                workspace.resolve("pom.xml"),
+                "<project><modules><module>sub</module></modules></project>\n",
+            )
+            write(workspace.resolve("sub/pom.xml"), "<project/>\n")
             write(workspace.resolve("src/A.java"), "class A {}\n")
             write(workspace.resolve("src/B.java"), "class B {}\n")
             write(workspace.resolve("sub/src/C.java"), "class C {}\n")

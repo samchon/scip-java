@@ -106,6 +106,29 @@ class GradleGraphLifecycleTest : BuildToolHarness() {
                 listOf("src/main/java/App.java", "src/main/java/C.java"),
                 artifactSources(artifact),
             )
+
+            val excluded = created.resolveSibling("C.java")
+            Files.writeString(
+                buildFile,
+                Files.readString(buildFile) + "\nsourceSets.main.java.exclude 'C.java'\n",
+            )
+            assertEquals(0, runScipJava(workspace, arguments).first)
+            assertEquals(listOf("src/main/java/App.java"), artifactSources(artifact))
+            assertTrue(Files.isRegularFile(excluded))
+
+            fun coldArtifact(temporary: Path): ByteArray {
+                targetroot.toFile().deleteRecursively()
+                Files.deleteIfExists(artifact)
+                val cold = arguments.toMutableList()
+                cold[2] = temporary.toString()
+                cold.add(8, "--rerun-tasks")
+                val result = runScipJava(workspace, cold)
+                assertEquals(0, result.first, result.second)
+                return Files.readAllBytes(artifact)
+            }
+            val firstCold = coldArtifact(Files.createDirectories(base.resolve("cold-one")))
+            val secondCold = coldArtifact(Files.createDirectories(base.resolve("cold-two")))
+            assertTrue(firstCold.contentEquals(secondCold))
         } finally {
             base.toFile().deleteRecursively()
         }

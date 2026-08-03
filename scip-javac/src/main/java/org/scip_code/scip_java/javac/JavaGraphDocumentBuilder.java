@@ -8,6 +8,7 @@ import com.sun.source.tree.Tree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.SourcePositions;
 import com.sun.source.util.TreePath;
+import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -57,6 +58,7 @@ final class JavaGraphDocumentBuilder {
   private final Map<String, JavaGraphShard.Node> nodes = new LinkedHashMap<>();
   private final Map<String, JavaGraphShard.Edge> edges = new LinkedHashMap<>();
   private final Map<String, JavaGraphShard.Unresolved> unresolved = new LinkedHashMap<>();
+  private Map<Element, Integer> localCollisionOrdinals;
 
   JavaGraphDocumentBuilder(
       CompilationUnitTree compilationUnit,
@@ -210,6 +212,13 @@ final class JavaGraphDocumentBuilder {
   }
 
   private String canonicalSymbol(Element element) {
+    String base = baseCanonicalSymbol(element);
+    if (!hasLocalIdentity(element)) return base;
+    int collision = localCollisionOrdinal(element);
+    return collision < 0 ? base : base + encode("java-collision", Integer.toString(collision));
+  }
+
+  private String baseCanonicalSymbol(Element element) {
     if (element instanceof ModuleElement module) {
       return encode("java-module", module.getQualifiedName().toString());
     }
@@ -230,7 +239,7 @@ final class JavaGraphDocumentBuilder {
     }
     TypeElement owner = binaryOwner(element);
     String module = moduleName(element);
-    String binaryOwner = ownerIdentity(owner);
+    String binaryOwner = baseOwnerIdentity(owner);
     String kind = element.getKind().name().toLowerCase(Locale.ROOT);
     String signature = structuralSignature(element);
     if (LOCAL_KINDS.contains(element.getKind()) || isAnonymous(element)) {
@@ -239,6 +248,57 @@ final class JavaGraphDocumentBuilder {
       return encode("java-local", module, binaryOwner, kind, signature, scope);
     }
     return encode("java", module, binaryOwner, kind, signature);
+  }
+
+  private boolean hasLocalIdentity(Element element) {
+    return LOCAL_KINDS.contains(element.getKind())
+        || isAnonymous(element)
+        || (element instanceof TypeElement type && isLocalType(type));
+  }
+
+  /**
+   * Disambiguate only structurally identical local declarations. Source coordinates order the
+   * indistinguishable siblings but never enter the identity, so line movement and unrelated
+   * statements leave the symbol unchanged.
+   */
+  private int localCollisionOrdinal(Element element) {
+    if (localCollisionOrdinals == null) localCollisionOrdinals = collectLocalCollisionOrdinals();
+    return localCollisionOrdinals.getOrDefault(element, -1);
+  }
+
+  private Map<Element, Integer> collectLocalCollisionOrdinals() {
+    Map<String, List<Element>> groups = new LinkedHashMap<>();
+    new TreePathScanner<Void, Void>() {
+      @Override
+      public Void scan(Tree tree, Void unused) {
+        if (tree != null) {
+          TreePath parent = getCurrentPath();
+          TreePath candidate =
+              parent == null
+                  ? new TreePath((CompilationUnitTree) tree)
+                  : new TreePath(parent, tree);
+          Element candidateElement = trees.getElement(candidate);
+          TreePath candidateDeclaration =
+              candidateElement == null ? null : trees.getPath(candidateElement);
+          if (candidateElement != null
+              && hasLocalIdentity(candidateElement)
+              && candidateDeclaration != null
+              && candidateDeclaration.getLeaf() == tree) {
+            groups
+                .computeIfAbsent(
+                    baseCanonicalSymbol(candidateElement), ignored -> new ArrayList<>())
+                .add(candidateElement);
+          }
+        }
+        return super.scan(tree, unused);
+      }
+    }.scan(compilationUnit, null);
+    Map<Element, Integer> output = new IdentityHashMap<>();
+    for (List<Element> group : groups.values()) {
+      if (group.size() < 2) continue;
+      for (int index = 0; index < group.size(); index++) output.put(group.get(index), index);
+    }
+    return output;
   }
 
   private String structuralSignature(Element element) {
@@ -272,9 +332,11 @@ final class JavaGraphDocumentBuilder {
     return element.getSimpleName() + ":" + canonicalType(element.asType());
   }
 
-  private String ownerIdentity(TypeElement owner) {
+  private String baseOwnerIdentity(TypeElement owner) {
     if (owner == null) return "";
-    return isLocalType(owner) ? symbol(owner) : elements.getBinaryName(owner).toString();
+    return isLocalType(owner)
+        ? baseCanonicalSymbol(owner)
+        : elements.getBinaryName(owner).toString();
   }
 
   private String localTypeSignature(TypeElement type) {
