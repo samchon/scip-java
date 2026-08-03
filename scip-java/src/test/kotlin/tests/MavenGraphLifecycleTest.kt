@@ -139,6 +139,10 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
               <groupId>example</groupId><artifactId>root</artifactId><version>1</version>
               <packaging>pom</packaging>
               <modules><module>module-a</module><module>module-b</module></modules>
+              <profiles><profile><id>output-property-must-remain-unset</id>
+                <activation><property><name>output</name></property></activation>
+                <modules><module>output-poison</module></modules>
+              </profile></profiles>
               <properties><maven.compiler.release>17</maven.compiler.release></properties>
               <build><pluginManagement><plugins><plugin>
                 <groupId>org.apache.maven.plugins</groupId>

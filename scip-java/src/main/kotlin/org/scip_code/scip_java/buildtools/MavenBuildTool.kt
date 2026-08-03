@@ -59,7 +59,6 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
             command += "-Dmaven.compiler.fork=true"
             if (graphStore != null) {
                 command += "org.apache.maven.plugins:maven-help-plugin:3.5.2:effective-pom"
-                command += "-Doutput=${graphStore.effectivePom}"
             }
             command +=
                 index.finalBuildCommand(
@@ -73,7 +72,18 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
                     )
                 )
 
-            val exit = index.app.runProcess(command, env = javac.environment)
-            Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: exit
+            val exit =
+                index.app.runProcess(
+                    command,
+                    env = javac.environment,
+                    captureStdout = graphStore != null,
+                )
+            val result = Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: exit
+            if (result.exitCode == 0 && graphStore != null) {
+                graphStore.captureEffectivePom(
+                    requireNotNull(exit.stdout) { "scip-java: Maven stdout was not captured" }
+                )
+            }
+            result
         }
 }

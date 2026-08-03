@@ -35,6 +35,20 @@ internal class MavenGraphGenerationStore(
     internal val current: Path = outputRoot.resolve("CURRENT")
     internal val effectivePom: Path = staging.resolve("EFFECTIVE_POM.xml")
 
+    internal fun captureEffectivePom(output: ByteArray) {
+        val start = output.indexOf("<?xml".toByteArray(StandardCharsets.US_ASCII))
+        require(start >= 0) { "scip-java: Maven effective POM was absent from stdout" }
+        val projectsEnd =
+            output.indexOf("</projects>".toByteArray(StandardCharsets.US_ASCII), start)
+        val closing =
+            if (projectsEnd >= 0) "</projects>".toByteArray(StandardCharsets.US_ASCII)
+            else "</project>".toByteArray(StandardCharsets.US_ASCII)
+        val closingStart = if (projectsEnd >= 0) projectsEnd else output.indexOf(closing, start)
+        require(closingStart >= 0) { "scip-java: Maven effective POM was truncated on stdout" }
+        Files.createDirectories(effectivePom.parent)
+        Files.write(effectivePom, output.copyOfRange(start, closingStart + closing.size))
+    }
+
     /** Start from the last committed generation without publishing any new state. */
     fun prepare() {
         deleteTree(staging)
@@ -376,6 +390,21 @@ internal class MavenGraphGenerationStore(
             output = next
         }
         return output
+    }
+
+    private fun ByteArray.indexOf(needle: ByteArray, fromIndex: Int = 0): Int {
+        if (needle.isEmpty()) return fromIndex.coerceAtMost(size)
+        for (index in fromIndex.coerceAtLeast(0)..size - needle.size) {
+            var matches = true
+            for (offset in needle.indices) {
+                if (this[index + offset] != needle[offset]) {
+                    matches = false
+                    break
+                }
+            }
+            if (matches) return index
+        }
+        return -1
     }
 
     private fun mavenTarget(workspace: Path, module: Path): String {

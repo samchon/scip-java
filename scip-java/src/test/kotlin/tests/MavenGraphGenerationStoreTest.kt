@@ -16,6 +16,21 @@ import org.scip_code.scip_java.buildtools.MavenGraphGenerationStore
 
 class MavenGraphGenerationStoreTest {
     @Test
+    fun capturesOnlyTheRawEffectivePomFromMavenOutput() {
+        withWorkspace { workspace ->
+            val store =
+                MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
+            store.prepare()
+            val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><projects><project/></projects>"
+            val output = "[INFO] effective model follows\r\n$xml\r\n[INFO] BUILD SUCCESS\r\n"
+
+            store.captureEffectivePom(output.toByteArray(StandardCharsets.UTF_8))
+
+            assertEquals(xml, Files.readString(store.effectivePom, StandardCharsets.UTF_8))
+        }
+    }
+
+    @Test
     fun publishesOnlySuccessfulCompleteGenerations() {
         withWorkspace { workspace ->
             val source = workspace.resolve("src/A.java")
