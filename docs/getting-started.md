@@ -157,6 +157,26 @@ scip-java index -- --batch-mode -DskipTests package
 
 The `index.scip` file contains the SCIP index and is ready to be used.
 
+### Export an atomic javac graph snapshot
+
+Pass `--graph-output` to export attributed Java declarations and relationships
+from the same javac invocations that produce SCIP:
+
+```sh
+scip-java index --graph-output java-graph.json
+```
+
+This opt-in Gradle and Maven route preserves incremental compilation, Gradle
+daemons and configuration caches, and does not prepend `clean`. The JSON
+artifact identifies each build target and compiler universe, reports coverage
+for all graph fact families, and is replaced only after every target commits a
+valid generation. A failed build, malformed shard, or source change between
+compilation and publication leaves the previous artifact in place.
+
+The graph artifact currently contains Java facts only. Kotlin facts remain in
+the SCIP output. javac diagnostics are not exported; a compilation failure is
+reported by the build and retains the last successful graph generation.
+
 ### Cross-Repository Navigation (Optional)
 
 By default, `scip-java index` enables navigation within the local repository.

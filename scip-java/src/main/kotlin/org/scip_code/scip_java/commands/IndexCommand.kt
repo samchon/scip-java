@@ -50,6 +50,13 @@ class IndexCommand : CliktCommand(name = "index") {
             .path()
             .default(Paths.get("index.scip"))
 
+    val graphOutput: Path? by
+        option(
+                "--graph-output",
+                help = "Write the committed javac graph generations to this JSON artifact.",
+            )
+            .path()
+
     val targetroot: Path? by
         option(
                 "--targetroot",

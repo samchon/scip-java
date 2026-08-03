@@ -16,13 +16,20 @@ public class ScipWriter implements AutoCloseable {
   private final ScipAggregatorOptions options;
 
   public ScipWriter(ScipAggregatorOptions options) throws IOException {
-    this.tmp =
-        Files.createTempFile(
-            "scip-aggregator",
-            "index.scip",
-            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-r--r--")));
+    this.tmp = createTemporaryIndex();
     this.output = new ScipOutputStream(new BufferedOutputStream(Files.newOutputStream(tmp)));
     this.options = options;
+  }
+
+  private static Path createTemporaryIndex() throws IOException {
+    try {
+      return Files.createTempFile(
+          "scip-aggregator",
+          "index.scip",
+          PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-r--r--")));
+    } catch (UnsupportedOperationException ignored) {
+      return Files.createTempFile("scip-aggregator", "index.scip");
+    }
   }
 
   public void emitTyped(Index index) {

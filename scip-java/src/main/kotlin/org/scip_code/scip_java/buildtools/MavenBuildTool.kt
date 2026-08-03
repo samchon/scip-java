@@ -12,27 +12,43 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
         Files.isRegularFile(index.workingDirectory.resolve("pom.xml"))
 
     override fun generateScip(): Int {
-        val result = runBuild()
+        val graphStore =
+            index.graphOutput?.let {
+                MavenGraphGenerationStore(
+                    index.finalTargetroot(defaultTargetroot),
+                    index.workingDirectory,
+                    graphTarget,
+                )
+            }
+        graphStore?.prepare()
+        val result = runBuild(graphStore?.staging)
+        if (result.exitCode == 0) graphStore?.commit()
         return generateScipFromTargetroot(result, index.finalTargetroot(defaultTargetroot), index)
     }
 
     private val defaultTargetroot: Path = Paths.get("target", "scip-targetroot")
+    private val graphTarget = "maven"
 
-    private fun runBuild(): ProcessResult =
+    private fun runBuild(graphRoot: Path?): ProcessResult =
         TemporaryFiles.withDirectory(index) { tmp ->
             val mvnw = index.workingDirectory.resolve("mvnw")
+            val windowsMvnw = index.workingDirectory.resolve("mvnw.cmd")
             val mavenScript =
-                if (Files.isRegularFile(mvnw) && Files.isExecutable(mvnw)) mvnw.toString()
-                else "mvn"
+                if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsMvnw))
+                    windowsMvnw.toString()
+                else if (Files.isRegularFile(mvnw) && Files.isExecutable(mvnw)) mvnw.toString()
+                else if (java.io.File.separatorChar == '\\') "mvn.cmd" else "mvn"
             val javac =
                 Embedded.customJavac(
                     index.workingDirectory,
                     index.finalTargetroot(defaultTargetroot),
+                    graphRoot,
+                    graphRoot?.let { graphTarget },
                     tmp,
                 )
             val command = mutableListOf<String>()
             command += mavenScript
-            command += "-Dmaven.compiler.useIncrementalCompilation=false"
+            if (graphRoot == null) command += "-Dmaven.compiler.useIncrementalCompilation=false"
             // NOTE(olafur): the square/javapoet repo sets compilerId to
             // 'javac-with-javac', which appears to override the
             // '-Dmaven.compiler.executable' setting. Forcing the compilerId to
@@ -44,7 +60,7 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
                 index.finalBuildCommand(
                     listOf(
                         "--batch-mode",
-                        "clean",
+                        *(if (graphRoot == null) arrayOf("clean") else emptyArray()),
                         // Default to the "verify" command, as recommended by the official docs
                         // https://maven.apache.org/guides/introduction/introduction-to-the-lifecycle.html#usual-command-line-calls
                         "verify",

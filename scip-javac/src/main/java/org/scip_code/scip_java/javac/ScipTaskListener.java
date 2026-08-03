@@ -67,6 +67,7 @@ public final class ScipTaskListener implements TaskListener {
     perSourceState.remove(output);
     try {
       Files.deleteIfExists(output);
+      if (options.graphEnabled) Files.deleteIfExists(graphShardOutputPath(e));
     } catch (IOException ex) {
       reportException(ex, e);
     }
@@ -119,6 +120,18 @@ public final class ScipTaskListener implements TaskListener {
     }
     Path output = path.getOrThrow();
     PerSourceState state = perSourceState.computeIfAbsent(output, k -> new PerSourceState());
+    String relativePath = scipRelativePath(e);
+    if (options.graphEnabled && state.graphBuilder == null) {
+      state.graphBuilder =
+          new JavaGraphDocumentBuilder(
+              e.getCompilationUnit(),
+              types,
+              trees,
+              elements,
+              relativePath,
+              sourceText(e.getSourceFile()),
+              options.graphTarget);
+    }
     ScipVisitor visitor =
         new ScipVisitor(
             globals,
@@ -127,12 +140,15 @@ public final class ScipTaskListener implements TaskListener {
             types,
             trees,
             elements,
-            state.documentBuilder);
+            state.documentBuilder,
+            state.graphBuilder);
     visitor.visitCompilationUnit();
-    String relativePath = scipRelativePath(e);
     String text = options.includeText ? visitor.getSource() : "";
     Document document = state.documentBuilder.build("java", relativePath, text);
     writeShard(e, output, document);
+    if (options.graphEnabled && state.graphBuilder != null) {
+      writeGraphShard(e, state.graphBuilder.build(absolutePathFromUri(options, e.getSourceFile())));
+    }
   }
 
   private String scipRelativePath(TaskEvent e) {
@@ -148,16 +164,54 @@ public final class ScipTaskListener implements TaskListener {
     }
   }
 
+  private void writeGraphShard(TaskEvent event, JavaGraphShard shard) {
+    try {
+      shard.write(graphShardOutputPath(event));
+      writeGraphSeenMarker(event);
+    } catch (IOException e) {
+      reportException(e, event);
+    }
+  }
+
+  private Path graphShardOutputPath(TaskEvent event) {
+    Path relative = Paths.get(scipRelativePath(event));
+    return options.graphRoot == null
+        ? JavaGraphShard.outputPath(options.targetroot, relative)
+        : JavaGraphShard.outputPathAtRoot(options.graphRoot, relative);
+  }
+
+  private void writeGraphSeenMarker(TaskEvent event) throws IOException {
+    if (options.graphRoot == null) return;
+    Path relative = Paths.get(scipRelativePath(event));
+    Path marker =
+        options
+            .graphRoot
+            .resolve(".seen")
+            .resolve(relative)
+            .resolveSibling(relative.getFileName().toString() + ".seen");
+    Files.createDirectories(marker.getParent());
+    Files.writeString(marker, "");
+  }
+
+  private static String sourceText(JavaFileObject file) {
+    try {
+      return file.getCharContent(true).toString();
+    } catch (IOException ignored) {
+      return "";
+    }
+  }
+
   private static final class PerSourceState {
     final ScipDocumentBuilder documentBuilder = new ScipDocumentBuilder();
     final LocalSymbolsCache<Element, String> locals =
         new LocalSymbolsCache<>(new IdentityHashMap<>(), ScipSymbols::local);
+    JavaGraphDocumentBuilder graphBuilder;
   }
 
   public static Path absolutePathFromUri(ScipJavacOptions options, JavaFileObject file) {
     URI uri = file.toUri();
     if (options.uriScheme == UriScheme.BAZEL) {
-      String toString = file.toString().replace(":", "/");
+      String toString = file.toString();
       // Bazel's Java compiler constructs `SimpleFileObject/DirectoryFileObject` with a
       // "user-friendly" name that points to the original source file and an underlying
       // file path in a temporary directory. We're constrained by having to use only
@@ -167,8 +221,14 @@ public final class ScipTaskListener implements TaskListener {
           new String[] {"SimpleFileObject[", "DirectoryFileObject["};
       for (String pattern : knownBazelToStringPatterns) {
         if (toString.startsWith(pattern) && toString.endsWith("]")) {
-          Path path = Paths.get(toString.substring(pattern.length(), toString.length() - 1));
+          String displayPath = toString.substring(pattern.length(), toString.length() - 1);
+          Path path = Paths.get(displayPath);
           if (path.isAbsolute()) return path;
+          // Bazel may render a repository label with ':' as its package/target separator. Do not
+          // apply that normalization before checking for a Windows drive prefix: C:\\workspace is
+          // already the human-readable absolute source path needed to infer the sourceroot.
+          path = Paths.get(displayPath.replace(":", "/"));
+          if (options.sourceroot == null) return path.toAbsolutePath();
           return options.sourceroot.resolve(path);
         }
       }

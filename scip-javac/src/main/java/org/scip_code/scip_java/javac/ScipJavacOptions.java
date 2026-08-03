@@ -7,9 +7,11 @@ import com.sun.source.util.JavacTask;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Base64;
 import javax.tools.FileObject;
 import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
@@ -21,6 +23,9 @@ import org.scip_code.scip_java.shared.UriScheme;
 public class ScipJavacOptions extends ScipOptions {
 
   public boolean verboseEnabled = false;
+  public boolean graphEnabled = false;
+  public String graphTarget = "javac";
+  public Path graphRoot;
   public final ArrayList<String> errors = new ArrayList<>();
   public boolean alreadyReportedErrors = false;
   public Path generatedTargetRoot;
@@ -47,8 +52,12 @@ public class ScipJavacOptions extends ScipOptions {
         } else {
           result.targetroot = Paths.get(argValue);
         }
+      } else if (arg.startsWith("-targetroot-base64:")) {
+        result.targetroot = decodedPath(arg.substring("-targetroot-base64:".length()));
       } else if (arg.startsWith("-sourceroot:")) {
         result.sourceroot = Paths.get(arg.substring("-sourceroot:".length())).normalize();
+      } else if (arg.startsWith("-sourceroot-base64:")) {
+        result.sourceroot = decodedPath(arg.substring("-sourceroot-base64:".length())).normalize();
       } else if (arg.startsWith("-no-relative-path:")) {
         String value = arg.substring("-no-relative-path:".length());
         switch (value) {
@@ -78,6 +87,27 @@ public class ScipJavacOptions extends ScipOptions {
         result.verboseEnabled = true;
       } else if (arg.equals("-verbose:off")) {
         result.verboseEnabled = false;
+      } else if (arg.equals("-graph:on")) {
+        result.graphEnabled = true;
+      } else if (arg.equals("-graph:off")) {
+        result.graphEnabled = false;
+      } else if (arg.startsWith("-graph-target:")) {
+        result.graphTarget = arg.substring("-graph-target:".length());
+        if (result.graphTarget.isEmpty()) {
+          result.errors.add("empty -graph-target value\n");
+        }
+      } else if (arg.startsWith("-graph-target-base64:")) {
+        String value = arg.substring("-graph-target-base64:".length());
+        if (value.isEmpty()) result.errors.add("empty -graph-target-base64 value\n");
+        else result.graphTarget = decoded(value);
+      } else if (arg.startsWith("-graph-root:")) {
+        String value = arg.substring("-graph-root:".length());
+        if (value.isEmpty()) result.errors.add("empty -graph-root value\n");
+        else result.graphRoot = Paths.get(value);
+      } else if (arg.startsWith("-graph-root-base64:")) {
+        String value = arg.substring("-graph-root-base64:".length());
+        if (value.isEmpty()) result.errors.add("empty -graph-root-base64 value\n");
+        else result.graphRoot = decodedPath(value);
       } else if (arg.startsWith("-randomtimestamp")) {
       } else {
         result.errors.add(String.format("unknown flag '%s'\n", arg));
@@ -96,6 +126,14 @@ public class ScipJavacOptions extends ScipOptions {
       result.errors.add(missingRequiredDirectoryOption("sourceroot"));
     }
     return result;
+  }
+
+  private static Path decodedPath(String value) {
+    return Paths.get(decoded(value));
+  }
+
+  private static String decoded(String value) {
+    return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8);
   }
 
   private static boolean isSourcerootDefined(ScipJavacOptions options) {

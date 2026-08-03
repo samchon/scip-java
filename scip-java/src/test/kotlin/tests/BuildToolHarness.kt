@@ -25,7 +25,7 @@ import org.scip_code.scip_java.buildtools.ClasspathEntry
 abstract class BuildToolHarness {
 
     /** Run `scip-java` in-process with stdout/stderr redirected into a buffer. */
-    private fun runScipJava(workingDirectory: Path, arguments: List<String>): Pair<Int, String> {
+    protected fun runScipJava(workingDirectory: Path, arguments: List<String>): Pair<Int, String> {
         val buffer = ByteArrayOutputStream()
         val stream = PrintStream(buffer, true, StandardCharsets.UTF_8.name())
         val app = ScipJavaApp()
@@ -52,7 +52,7 @@ abstract class BuildToolHarness {
      * canonical paths into their output, so the sourceroot must be canonical too or path prefix
      * checks fail.
      */
-    private fun newTempBase(): Path = Files.createTempDirectory("buildtools").toRealPath()
+    protected fun newTempBase(): Path = Files.createTempDirectory("buildtools").toRealPath()
 
     /**
      * Materialize a test project from the `fixtures/<name>` directory on the test classpath into

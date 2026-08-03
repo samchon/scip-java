@@ -1,6 +1,8 @@
 package org.scip_code.scip_java.gradle;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.gradle.api.Plugin;
@@ -38,6 +40,14 @@ public class ScipGradlePlugin implements Plugin<Project> {
 
     String targetRoot = requiredExtra(extraProperties, "scipTarget").toString();
     String sourceRoot = project.getRootDir().toString();
+    boolean graphEnabled =
+        Boolean.parseBoolean(
+            String.valueOf(extraProperties.getOrDefault("scipGraphEnabled", false)));
+    GraphGenerationCoordinator graphCoordinator =
+        graphEnabled
+            ? GraphGenerationCoordinator.acquire(
+                project, java.nio.file.Paths.get(targetRoot), project.getRootDir().toPath())
+            : null;
 
     // Compilation tasks we need to trigger to index all the sources we care
     // about. Built up as we detect the java and kotlin plugins.
@@ -55,12 +65,26 @@ public class ScipGradlePlugin implements Plugin<Project> {
           .withType(JavaCompile.class)
           .configureEach(
               task -> {
-                // Disable incremental compilation so the random timestamp added
-                // below forces a full recompile and Gradle doesn't cache stale
-                // SCIP state.
-                task.getOptions().setIncremental(false);
-
                 if (pluginAdded) {
+                  if (!graphEnabled) task.getOptions().setIncremental(false);
+                  String graphTarget = task.getPath();
+                  GraphGenerationStore graphStore =
+                      graphEnabled
+                          ? new GraphGenerationStore(
+                              java.nio.file.Paths.get(targetRoot),
+                              project.getRootDir().toPath(),
+                              graphTarget)
+                          : null;
+                  if (graphStore != null) {
+                    graphCoordinator.register(task, graphStore);
+                    task.getOutputs().dir(graphStore.outputRoot().toFile());
+                    task.doFirst(ignored -> graphStore.prepare());
+                    task.doLast(
+                        ignored ->
+                            graphStore.commit(
+                                task.getSource().getFiles(), graphStore.universe(task)));
+                  }
+
                   // Groovy build scripts can append interpolated strings
                   // (GString) to compilerArgs, so despite the List<String>
                   // signature the list may hold non-String elements. Iterate
@@ -75,20 +99,21 @@ public class ScipGradlePlugin implements Plugin<Project> {
                       args.stream()
                           .anyMatch(arg -> String.valueOf(arg).startsWith("-Xplugin:scip"));
                   if (!alreadyAdded) {
-                    // The random timestamp ensures the sources are _always_
-                    // recompiled, so Gradle doesn't cache any state.
-                    // TODO: before this plugin is published to Maven Central, we
-                    // will need to revert this change - as it can have
-                    // detrimental effect on people's builds.
-                    task.getOptions()
-                        .getCompilerArgs()
-                        .add(
-                            "-Xplugin:scip -targetroot:"
-                                + targetRoot
-                                + " -sourceroot:"
-                                + sourceRoot
-                                + " -randomtimestamp="
-                                + System.nanoTime());
+                    StringBuilder option =
+                        new StringBuilder("-Xplugin:scip -targetroot-base64:")
+                            .append(encodedPath(targetRoot))
+                            .append(" -sourceroot-base64:")
+                            .append(encodedPath(sourceRoot));
+                    if (graphStore != null) {
+                      option
+                          .append(" -graph:on -graph-root-base64:")
+                          .append(encodedPath(graphStore.staging().toString()))
+                          .append(" -graph-target-base64:")
+                          .append(encodedValue(graphTarget));
+                    } else {
+                      option.append(" -randomtimestamp=").append(System.nanoTime());
+                    }
+                    task.getOptions().getCompilerArgs().add(option.toString());
                   }
                 }
               });
@@ -121,7 +146,12 @@ public class ScipGradlePlugin implements Plugin<Project> {
 
     project.getTasks().create("scipCompileAll").dependsOn(triggers);
 
-    project.getTasks().create("scipPrintDependencies", WriteDependencies.class);
+    WriteDependencies dependencies =
+        project.getTasks().create("scipPrintDependencies", WriteDependencies.class);
+    WriteDependencies.configure(
+        project,
+        dependencies,
+        java.nio.file.Paths.get(requiredExtra(extraProperties, "dependenciesOut").toString()));
   }
 
   /**
@@ -214,5 +244,15 @@ public class ScipGradlePlugin implements Plugin<Project> {
           name + " extra property must be set by the scip-java Gradle init script");
     }
     return value;
+  }
+
+  private static String encodedPath(String value) {
+    return encodedValue(value);
+  }
+
+  private static String encodedValue(String value) {
+    return Base64.getUrlEncoder()
+        .withoutPadding()
+        .encodeToString(value.getBytes(StandardCharsets.UTF_8));
   }
 }

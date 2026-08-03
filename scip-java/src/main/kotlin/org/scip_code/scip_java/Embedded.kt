@@ -31,17 +31,30 @@ object Embedded {
 
     data class CustomJavac(val executable: Path, val environment: Map<String, String>)
 
-    fun customJavac(sourceroot: Path, targetroot: Path, tmp: Path): CustomJavac {
+    fun customJavac(
+        sourceroot: Path,
+        targetroot: Path,
+        graphRoot: Path?,
+        graphTarget: String?,
+        tmp: Path,
+    ): CustomJavac {
         val bin = tmp.resolve("bin")
-        val javac = bin.resolve("javac")
-        val java = bin.resolve("java")
+        val windows = java.io.File.separatorChar == '\\'
+        val javac = bin.resolve(if (windows) "javac.cmd" else "javac")
+        val java = bin.resolve(if (windows) "java.cmd" else "java")
         val pluginpath = scipJar(tmp)
         val errorpath = javacErrorpath(tmp)
         val javacopts = targetroot.resolve("javacopts.txt")
         Files.createDirectories(targetroot)
         Files.createDirectories(bin)
-        copyResource(java, "scip-java/java-forwarder.sh")
-        copyResource(javac, "scip-java/custom-javac.sh")
+        copyResource(
+            java,
+            if (windows) "scip-java/java-forwarder.cmd" else "scip-java/java-forwarder.sh",
+        )
+        copyResource(
+            javac,
+            if (windows) "scip-java/custom-javac.cmd" else "scip-java/custom-javac.sh",
+        )
         javac.toFile().setExecutable(true)
         java.toFile().setExecutable(true)
         return CustomJavac(
@@ -49,11 +62,15 @@ object Embedded {
             mapOf(
                 "SCIP_ERRORPATH" to errorpath.toString(),
                 "SCIP_JAVAC_LAUNCHER_JVM_OPTIONS" to javacLauncherJvmOptions.joinToString("\n"),
+                "SCIP_JAVAC_LAUNCHER_JVM_OPTIONS_CMD" to javacLauncherJvmOptions.joinToString(" "),
                 "SCIP_JAVAC_OPTIONS_PREFIX" to tmp.resolve("javac_newarguments").toString(),
                 "SCIP_OLD_JAVAC_OPTS" to javacopts.toString(),
                 "SCIP_PLUGINPATH" to pluginpath.toString(),
                 "SCIP_SOURCEROOT" to sourceroot.toString(),
                 "SCIP_TARGETROOT" to targetroot.toString(),
+                "SCIP_GRAPH_ENABLED" to (graphRoot != null).toString(),
+                "SCIP_GRAPH_ROOT" to (graphRoot?.toString() ?: ""),
+                "SCIP_GRAPH_TARGET" to (graphTarget ?: ""),
             ),
         )
     }
