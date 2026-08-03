@@ -77,16 +77,12 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
             graphPlugin?.goal?.let(command::add)
             command += buildCommand
 
-            val exit =
-                index.app.runProcess(
-                    command,
-                    env =
-                        javac.environment +
-                            mapOf(
-                                "SCIP_GRAPH_MAVEN_REACTOR" to
-                                    (graphStore?.reactorManifest?.toString() ?: "")
-                            ),
-                )
+            val environment =
+                if (graphStore == null) javac.environment
+                else
+                    javac.environment +
+                        mapOf("SCIP_GRAPH_MAVEN_REACTOR" to graphStore.reactorManifest.toString())
+            val exit = index.app.runProcess(command, env = environment)
             val result = Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: exit
             result
         }

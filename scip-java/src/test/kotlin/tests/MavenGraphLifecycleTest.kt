@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.scip_code.scip_java.ScipJava
 
 class MavenGraphLifecycleTest : BuildToolHarness() {
     @Test
@@ -19,7 +20,8 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
         try {
             val workspace = Files.createDirectories(base.resolve("working Directory 한글"))
             val cache = Files.createDirectories(base.resolve("cache"))
-            writeProject(workspace)
+            val mavenRepository = cache.resolve("maven repository")
+            writeProject(workspace, mavenRepository)
             val targetroot = workspace.resolve("targetroot")
             val artifact = workspace.resolve("graph.json")
             val arguments =
@@ -37,6 +39,14 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
 
             val first = runScipJava(workspace, arguments)
             assertEquals(0, first.first, first.second)
+            val graphPluginVersion = "${ScipJava.version}-graph-reactor-1"
+            assertTrue(
+                Files.isRegularFile(
+                    mavenRepository.resolve(
+                        "org/scip-code/scip-maven-plugin/$graphPluginVersion/scip-maven-plugin-$graphPluginVersion.jar"
+                    )
+                )
+            )
             assertEquals(listOf("maven:module-a", "maven:module-b"), artifactTargets(artifact))
             assertEquals(
                 listOf(
@@ -135,8 +145,11 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
         }
     }
 
-    private fun writeProject(root: Path) {
-        write(root.resolve(".mvn/maven.config"), "-q\n")
+    private fun writeProject(root: Path, repository: Path) {
+        write(
+            root.resolve(".mvn/maven.config"),
+            "-q\n-Dmaven.repo.local=${repository.toAbsolutePath().normalize()}\n",
+        )
         write(
             root.resolve("pom.xml"),
             """

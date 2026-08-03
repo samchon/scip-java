@@ -47,7 +47,15 @@ internal object MavenGraphPlugin {
         probe += "org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate"
         probe += "-Dexpression=settings.localRepository"
         probe += "-Doutput=$probeOutput"
-        val probeResult = index.app.runProcess(probe)
+        val probeResult =
+            index.app.runProcess(
+                probe,
+                env =
+                    mapOf(
+                        "MAVEN_BASEDIR" to
+                            (System.getenv("MAVEN_BASEDIR") ?: index.workingDirectory.toString())
+                    ),
+            )
         if (probeResult.exitCode != 0) return Installation(probeResult, null)
 
         val repository =
@@ -101,9 +109,21 @@ internal object MavenGraphPlugin {
                     output += argument
                     if (index + 1 < arguments.size) output += arguments[++index]
                 }
+                argument in setOf("-D", "--define") -> {
+                    if (
+                        index + 1 < arguments.size &&
+                            arguments[index + 1].startsWith("maven.repo.local=")
+                    ) {
+                        output += argument
+                        output += arguments[++index]
+                    }
+                }
+                (argument.startsWith("-s") && !argument.startsWith("--") && argument.length > 2) ||
+                    (argument.startsWith("-gs") && argument.length > 3) -> output += argument
                 argument.startsWith("--settings=") ||
                     argument.startsWith("--global-settings=") ||
-                    argument.startsWith("-Dmaven.repo.local=") -> output += argument
+                    argument.startsWith("-Dmaven.repo.local=") ||
+                    argument.startsWith("--define=maven.repo.local=") -> output += argument
                 argument in setOf("-o", "--offline") -> output += argument
             }
             index += 1
