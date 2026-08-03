@@ -137,18 +137,42 @@ class GraphGenerationStoreTest {
   @Test
   void externalTaskInputsUseContentIdentityInsteadOfTemporaryDirectories(@TempDir Path root)
       throws IOException {
-    GraphGenerationStore store =
-        new GraphGenerationStore(root.resolve("target"), root.resolve("project"), ":compileJava");
     Path first = root.resolve("first-random/scip-plugin.jar");
     Path second = root.resolve("second-random/scip-plugin.jar");
     Files.createDirectories(first.getParent());
     Files.createDirectories(second.getParent());
     Files.writeString(first, "same embedded plugin\n");
     Files.writeString(second, "same embedded plugin\n");
+    GraphGenerationStore firstStore =
+        new GraphGenerationStore(
+            root.resolve("target"), root.resolve("project"), ":compileJava", first);
+    GraphGenerationStore secondStore =
+        new GraphGenerationStore(
+            root.resolve("target"), root.resolve("project"), ":compileJava", second);
 
-    assertEquals(store.universeInput(first), store.universeInput(second));
+    assertEquals(firstStore.universeInput(first), secondStore.universeInput(second));
     Files.writeString(second, "different embedded plugin\n");
-    assertNotEquals(store.universeInput(first), store.universeInput(second));
+    assertNotEquals(firstStore.universeInput(first), secondStore.universeInput(second));
+  }
+
+  @Test
+  void ordinarySameNamedInputsRetainTheirPathToContentAssociation(@TempDir Path root)
+      throws IOException {
+    GraphGenerationStore store =
+        new GraphGenerationStore(root.resolve("target"), root.resolve("project"), ":compileJava");
+    Path first = root.resolve("cache-a/library.jar");
+    Path second = root.resolve("cache-b/library.jar");
+    Files.createDirectories(first.getParent());
+    Files.createDirectories(second.getParent());
+    Files.writeString(first, "first\n");
+    Files.writeString(second, "second\n");
+
+    Set<String> before = Set.of(store.universeInput(first), store.universeInput(second));
+    Files.writeString(first, "second\n");
+    Files.writeString(second, "first\n");
+    Set<String> after = Set.of(store.universeInput(first), store.universeInput(second));
+
+    assertNotEquals(before, after);
   }
 
   private static void marker(Path staging, String source) throws IOException {

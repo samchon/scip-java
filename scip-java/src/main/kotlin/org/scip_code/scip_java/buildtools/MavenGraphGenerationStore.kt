@@ -33,6 +33,7 @@ internal class MavenGraphGenerationStore(
     internal val staging: Path = outputRoot.resolve("staging")
     private val generations = outputRoot.resolve("generations")
     internal val current: Path = outputRoot.resolve("CURRENT")
+    internal val effectivePom: Path = staging.resolve("EFFECTIVE_POM.xml")
 
     /** Start from the last committed generation without publishing any new state. */
     fun prepare() {
@@ -44,11 +45,13 @@ internal class MavenGraphGenerationStore(
         Files.deleteIfExists(staging.resolve("TARGET"))
         Files.deleteIfExists(staging.resolve("TARGETS"))
         Files.deleteIfExists(staging.resolve("SOURCES"))
+        Files.deleteIfExists(effectivePom)
     }
 
     /** Reconcile deleted sources and publish only after Maven completed successfully. */
     fun commit() {
         val ownership = reactorOwnership()
+        Files.deleteIfExists(effectivePom)
         val previouslyDeclared = readLines(staging.resolve(declaredSourcesFile))
         val seenSources = seenSources()
         val shards = graphShards(staging)
@@ -140,6 +143,7 @@ internal class MavenGraphGenerationStore(
      * remains on disk; generated sources retain the existing last-good behavior.
      */
     private fun reactorOwnership(): ReactorOwnership {
+        if (Files.isRegularFile(effectivePom)) return effectiveReactorOwnership(effectivePom)
         val workspace = sourceRoot.toAbsolutePath().normalize()
         val modules = linkedSetOf<Path>()
         var complete = true
@@ -208,6 +212,80 @@ internal class MavenGraphGenerationStore(
         return ReactorOwnership(targets, sources, complete)
     }
 
+    /**
+     * Resolve the exact reactor Maven selected for this invocation. The effective POM is generated
+     * by the same Maven command immediately before the requested lifecycle goals, so inactive
+     * profile modules are absent and inherited/profile build roots are already interpolated.
+     */
+    private fun effectiveReactorOwnership(path: Path): ReactorOwnership {
+        val workspace = sourceRoot.toAbsolutePath().normalize()
+        val root = parsePom(path)
+        val projects = if (root.nodeName == "project") listOf(root) else children(root, "project")
+        require(projects.isNotEmpty()) { "scip-java: Maven effective POM has no projects at $path" }
+        val targets = linkedSetOf<String>()
+        val sources = linkedSetOf<String>()
+        for (project in projects) {
+            val build = child(project, "build")
+            val roots =
+                listOfNotNull(build?.let(::sourceDirectory), build?.let(::testSourceDirectory))
+                    .map(Path::of)
+                    .map { if (it.isAbsolute) it else workspace.resolve(it) }
+                    .map(Path::toAbsolutePath)
+                    .map(Path::normalize)
+            val buildDirectory =
+                child(build ?: project, "directory")
+                    ?.textContent
+                    .orEmpty()
+                    .trim()
+                    .takeIf(String::isNotEmpty)
+                    ?.let(Path::of)
+                    ?.let { if (it.isAbsolute) it else workspace.resolve(it) }
+                    ?.toAbsolutePath()
+                    ?.normalize()
+            val module =
+                sequenceOf(buildDirectory, *roots.toTypedArray())
+                    .filterNotNull()
+                    .mapNotNull { owningModule(workspace, it) }
+                    .firstOrNull()
+                    ?: error("scip-java: unable to locate Maven project directory from $path")
+            val target = mavenTarget(workspace, module)
+            targets += target
+            for (sourceRoot in roots.distinct()) {
+                if (!sourceRoot.startsWith(workspace) || !Files.isDirectory(sourceRoot)) continue
+                Files.walk(sourceRoot).use { paths ->
+                    paths
+                        .filter(Files::isRegularFile)
+                        .filter { it.fileName.toString().endsWith(".java") }
+                        .forEach { source ->
+                            val relative =
+                                workspace
+                                    .relativize(source.toAbsolutePath().normalize())
+                                    .toString()
+                                    .replace('\\', '/')
+                            sources += declaredSource(target, relative)
+                        }
+                }
+            }
+        }
+        return ReactorOwnership(targets, sources, true)
+    }
+
+    private fun sourceDirectory(build: org.w3c.dom.Element): String? =
+        child(build, "sourceDirectory")?.textContent?.trim()?.takeIf(String::isNotEmpty)
+
+    private fun testSourceDirectory(build: org.w3c.dom.Element): String? =
+        child(build, "testSourceDirectory")?.textContent?.trim()?.takeIf(String::isNotEmpty)
+
+    private fun owningModule(workspace: Path, input: Path): Path? {
+        var candidate = input
+        while (candidate.startsWith(workspace)) {
+            if (Files.isRegularFile(candidate.resolve("pom.xml"))) return candidate
+            if (candidate == workspace) break
+            candidate = candidate.parent ?: break
+        }
+        return null
+    }
+
     private fun seenSources(): Set<String> {
         val root = staging.resolve(".seen")
         if (!Files.isDirectory(root)) return emptySet()
@@ -273,6 +351,18 @@ internal class MavenGraphGenerationStore(
             }
         }
         return null
+    }
+
+    private fun children(parent: org.w3c.dom.Element, name: String): List<org.w3c.dom.Element> {
+        val output = mutableListOf<org.w3c.dom.Element>()
+        val nodes = parent.childNodes
+        for (index in 0 until nodes.length) {
+            val node = nodes.item(index)
+            if (node.nodeType == org.w3c.dom.Node.ELEMENT_NODE && node.nodeName == name) {
+                output += node as org.w3c.dom.Element
+            }
+        }
+        return output
     }
 
     private fun interpolate(value: String, properties: Map<String, String>): String {

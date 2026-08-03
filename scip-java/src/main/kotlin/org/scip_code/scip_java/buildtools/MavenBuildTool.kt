@@ -21,7 +21,7 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
                 )
             }
         graphStore?.prepare()
-        val result = runBuild(graphStore?.staging)
+        val result = runBuild(graphStore)
         if (result.exitCode == 0) graphStore?.commit()
         return generateScipFromTargetroot(result, index.finalTargetroot(defaultTargetroot), index)
     }
@@ -29,8 +29,9 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
     private val defaultTargetroot: Path = Paths.get("target", "scip-targetroot")
     private val graphTarget = "maven"
 
-    private fun runBuild(graphRoot: Path?): ProcessResult =
+    private fun runBuild(graphStore: MavenGraphGenerationStore?): ProcessResult =
         TemporaryFiles.withDirectory(index) { tmp ->
+            val graphRoot = graphStore?.staging
             val mvnw = index.workingDirectory.resolve("mvnw")
             val windowsMvnw = index.workingDirectory.resolve("mvnw.cmd")
             val mavenScript =
@@ -56,6 +57,10 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
             command += "-Dmaven.compiler.compilerId=javac"
             command += "-Dmaven.compiler.executable=${javac.executable}"
             command += "-Dmaven.compiler.fork=true"
+            if (graphStore != null) {
+                command += "org.apache.maven.plugins:maven-help-plugin:3.5.2:effective-pom"
+                command += "-Doutput=${graphStore.effectivePom}"
+            }
             command +=
                 index.finalBuildCommand(
                     listOf(

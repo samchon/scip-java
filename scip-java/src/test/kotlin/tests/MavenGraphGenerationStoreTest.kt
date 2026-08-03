@@ -90,6 +90,45 @@ class MavenGraphGenerationStoreTest {
         }
     }
 
+    @Test
+    fun removesAnInactiveProfileModuleUsingTheEffectiveReactor() {
+        withWorkspace { workspace ->
+            write(
+                workspace.resolve("pom.xml"),
+                "<project><profiles><profile><id>extra</id><modules><module>sub</module></modules></profile></profiles></project>\n",
+            )
+            write(workspace.resolve("sub/pom.xml"), "<project/>\n")
+            val source = workspace.resolve("sub/inherited/java/B.java")
+            write(source, "class B {}\n")
+            val store =
+                MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
+
+            store.prepare()
+            write(
+                store.staging.resolve("sub/inherited/java/B.java.graph.json"),
+                shard("maven:sub", "sub/inherited/java/B.java"),
+            )
+            write(
+                store.effectivePom,
+                effectivePom(
+                    workspace to workspace.resolve("src/main/java"),
+                    workspace.resolve("sub") to workspace.resolve("sub/inherited/java"),
+                ),
+            )
+            store.commit()
+
+            store.prepare()
+            write(store.effectivePom, effectivePom(workspace to workspace.resolve("src/main/java")))
+            store.commit()
+
+            val generation = Files.readString(store.current).trim()
+            val committed = store.current.parent.resolve("generations").resolve(generation)
+            assertTrue(Files.isRegularFile(source))
+            assertEquals("", Files.readString(committed.resolve("SOURCES")))
+            assertFalse(Files.exists(committed.resolve("sub/inherited/java/B.java.graph.json")))
+        }
+    }
+
     private fun withWorkspace(block: (Path) -> Unit) {
         val workspace = createTempDirectory("maven-graph-store").toRealPath()
         try {
@@ -116,4 +155,21 @@ class MavenGraphGenerationStoreTest {
                     .digest(text.toByteArray(StandardCharsets.UTF_8))
             )
     }
+
+    private fun effectivePom(vararg projects: Pair<Path, Path>): String = buildString {
+        append("<projects>")
+        for ((module, source) in projects) {
+            append("<project><build><sourceDirectory>")
+            append(xml(source))
+            append("</sourceDirectory><testSourceDirectory>")
+            append(xml(module.resolve("src/test/java")))
+            append("</testSourceDirectory><directory>")
+            append(xml(module.resolve("target")))
+            append("</directory></build></project>")
+        }
+        append("</projects>\n")
+    }
+
+    private fun xml(path: Path): String =
+        path.toAbsolutePath().normalize().toString().replace("&", "&amp;")
 }

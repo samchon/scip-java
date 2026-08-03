@@ -9,6 +9,7 @@ import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.Task;
 import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.file.FileCollection;
 import org.gradle.api.initialization.Settings;
 import org.gradle.api.internal.GradleInternal;
 import org.gradle.api.tasks.compile.JavaCompile;
@@ -57,7 +58,8 @@ public class ScipGradlePlugin implements Plugin<Project> {
       triggers.add("compileJava");
       triggers.add("compileTestJava");
 
-      Object javacPluginDep = project.files(requiredExtra(extraProperties, "javacPluginJar"));
+      FileCollection javacPluginDep =
+          project.files(requiredExtra(extraProperties, "javacPluginJar"));
       boolean pluginAdded = tryAddJavacPlugin(project, javacPluginDep);
 
       project
@@ -73,7 +75,8 @@ public class ScipGradlePlugin implements Plugin<Project> {
                           ? new GraphGenerationStore(
                               java.nio.file.Paths.get(targetRoot),
                               project.getRootDir().toPath(),
-                              graphTarget)
+                              graphTarget,
+                              javacPluginDep.getSingleFile().toPath())
                           : null;
                   if (graphStore != null) {
                     graphCoordinator.register(task, graphStore);

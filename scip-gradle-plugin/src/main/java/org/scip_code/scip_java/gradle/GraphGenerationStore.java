@@ -41,11 +41,18 @@ final class GraphGenerationStore {
   private final Path staging;
   private final Path generations;
   private final Path current;
+  private final Path embeddedJavacPlugin;
   private boolean committedThisBuild;
 
   GraphGenerationStore(Path targetRoot, Path sourceRoot, String target) {
+    this(targetRoot, sourceRoot, target, null);
+  }
+
+  GraphGenerationStore(Path targetRoot, Path sourceRoot, String target, Path embeddedJavacPlugin) {
     this.sourceRoot = sourceRoot.toAbsolutePath().normalize();
     this.target = target;
+    this.embeddedJavacPlugin =
+        embeddedJavacPlugin == null ? null : embeddedJavacPlugin.toAbsolutePath().normalize();
     this.targetKey = digest(target);
     this.storeRoot =
         targetRoot.toAbsolutePath().normalize().resolve("META-INF").resolve("scip-graph-store");
@@ -191,10 +198,18 @@ final class GraphGenerationStore {
   String universeInput(Path input) throws IOException {
     Path normalized = input.toAbsolutePath().normalize();
     String digest = fileDigest(normalized);
-    String identity =
-        normalized.startsWith(sourceRoot)
-            ? normalizedPath(normalized)
-            : "external/" + normalized.getFileName();
+    String identity;
+    if (normalized.startsWith(sourceRoot)) {
+      identity = normalizedPath(normalized);
+    } else if (normalized.equals(embeddedJavacPlugin)) {
+      // The compiler plugin is extracted into a fresh CLI temporary directory on every cold run.
+      // Its semantic identity is the embedded role plus exact bytes, not that random parent path.
+      identity = "embedded/scip-plugin.jar";
+    } else {
+      // Ordinary compiler inputs retain path-to-content association. Basename-only identities let
+      // two same-named classpath entries exchange bytes without changing the universe.
+      identity = "external/" + normalizedPath(normalized);
+    }
     return identity + ":" + digest;
   }
 

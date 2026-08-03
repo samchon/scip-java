@@ -215,7 +215,7 @@ final class JavaGraphDocumentBuilder {
     String base = baseCanonicalSymbol(element);
     if (!hasLocalIdentity(element)) return base;
     int collision = localCollisionOrdinal(element);
-    return collision < 0 ? base : base + encode("java-collision", Integer.toString(collision));
+    return collision < 1 ? base : base + encode("java-collision", Integer.toString(collision));
   }
 
   private String baseCanonicalSymbol(Element element) {
@@ -267,6 +267,15 @@ final class JavaGraphDocumentBuilder {
   }
 
   private Map<Element, Integer> collectLocalCollisionOrdinals() {
+    Map<Element, Integer> output = new IdentityHashMap<>();
+    assignCollisionOrdinals(collectLocalCollisionGroups(true), output);
+    // Member/local identities may now safely ask for their local type owner's final symbol.
+    localCollisionOrdinals = output;
+    assignCollisionOrdinals(collectLocalCollisionGroups(false), output);
+    return output;
+  }
+
+  private Map<String, List<Element>> collectLocalCollisionGroups(boolean typeDeclarations) {
     Map<String, List<Element>> groups = new LinkedHashMap<>();
     new TreePathScanner<Void, Void>() {
       @Override
@@ -282,6 +291,7 @@ final class JavaGraphDocumentBuilder {
               candidateElement == null ? null : trees.getPath(candidateElement);
           if (candidateElement != null
               && hasLocalIdentity(candidateElement)
+              && (candidateElement instanceof TypeElement) == typeDeclarations
               && candidateDeclaration != null
               && candidateDeclaration.getLeaf() == tree) {
             groups
@@ -293,12 +303,17 @@ final class JavaGraphDocumentBuilder {
         return super.scan(tree, unused);
       }
     }.scan(compilationUnit, null);
-    Map<Element, Integer> output = new IdentityHashMap<>();
+    return groups;
+  }
+
+  private static void assignCollisionOrdinals(
+      Map<String, List<Element>> groups, Map<Element, Integer> output) {
     for (List<Element> group : groups.values()) {
       if (group.size() < 2) continue;
-      for (int index = 0; index < group.size(); index++) output.put(group.get(index), index);
+      // Keep the first declaration on the unsuffixed identity. Appending an otherwise identical
+      // sibling therefore never renames the declaration that already existed.
+      for (int index = 1; index < group.size(); index++) output.put(group.get(index), index);
     }
-    return output;
   }
 
   private String structuralSignature(Element element) {
@@ -334,9 +349,7 @@ final class JavaGraphDocumentBuilder {
 
   private String baseOwnerIdentity(TypeElement owner) {
     if (owner == null) return "";
-    return isLocalType(owner)
-        ? baseCanonicalSymbol(owner)
-        : elements.getBinaryName(owner).toString();
+    return isLocalType(owner) ? symbol(owner) : elements.getBinaryName(owner).toString();
   }
 
   private String localTypeSignature(TypeElement type) {

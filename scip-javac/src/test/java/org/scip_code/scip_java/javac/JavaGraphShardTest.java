@@ -290,6 +290,47 @@ class JavaGraphShardTest {
   }
 
   @Test
+  void identicalLocalTypesGiveTheirMembersDistinctOwnerIdentities(@TempDir Path root) {
+    String source =
+        """
+        package example;
+        public class Example {
+          void work() {
+            { class Local { void run() {} } new Local().run(); }
+            { class Local { void run() {} } new Local().run(); }
+          }
+        }
+        """;
+
+    String json = compile(root, source);
+    assertEquals(2, symbolsFor(json, "Local").stream().distinct().count());
+    assertEquals(2, edgeTargetsFor(json, "run()").stream().distinct().count());
+  }
+
+  @Test
+  void appendingAnIdenticalSiblingKeepsTheExistingIdentity(@TempDir Path root) {
+    String single =
+        """
+        package example;
+        public class Example {
+          void work() { { int value = 1; } }
+        }
+        """;
+    String appended =
+        """
+        package example;
+        public class Example {
+          void work() { { int value = 1; } { int value = 1; } }
+        }
+        """;
+
+    String original = symbolFor(compile(root.resolve("single"), single), "value");
+    List<String> siblings = symbolsFor(compile(root.resolve("appended"), appended), "value");
+    assertEquals(original, siblings.get(0));
+    assertEquals(2, siblings.stream().distinct().count());
+  }
+
+  @Test
   void graphOptOutDoesNotTouchAnExistingGraphShard(@TempDir Path root) throws IOException {
     Path sourceRoot = root.resolve("source").toAbsolutePath();
     Path targetRoot = root.resolve("target").toAbsolutePath();
@@ -393,6 +434,18 @@ class JavaGraphShardTest {
         Pattern.compile(
             "\\{\\\"symbol\\\":\\\"([^\\\"]+)\\\",[^{}]*\\\"name\\\":\\\""
                 + Pattern.quote(name)
+                + "\\\"");
+    Matcher matcher = pattern.matcher(json);
+    List<String> result = new java.util.ArrayList<>();
+    while (matcher.find()) result.add(matcher.group(1));
+    return result;
+  }
+
+  private static List<String> edgeTargetsFor(String json, String targetName) {
+    Pattern pattern =
+        Pattern.compile(
+            "\\\"to\\\":\\\"([^\\\"]+)\\\"[^{}]*\\\"targetName\\\":\\\""
+                + Pattern.quote(targetName)
                 + "\\\"");
     Matcher matcher = pattern.matcher(json);
     List<String> result = new java.util.ArrayList<>();
