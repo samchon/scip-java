@@ -62,7 +62,7 @@ public class ScipOptionBuilder {
     previousArg = arg;
   }
 
-  private String unwrapQuote(String arg) {
+  private static String unwrapQuote(String arg) {
     if (arg.startsWith("\"") && arg.endsWith("\"")) {
       return arg.substring(1, arg.length() - 1);
     } else {
@@ -170,9 +170,10 @@ public class ScipOptionBuilder {
 
   static String graphInvocationSlot(List<String> arguments, Path scratch) {
     for (int index = 0; index < arguments.size(); index++) {
-      String argument = arguments.get(index);
+      String argument = unwrapQuote(arguments.get(index));
       if ("-d".equals(argument) && index + 1 < arguments.size()) {
-        return JavaGraphShard.digest(graphUniverseArgument(arguments.get(index + 1), scratch));
+        return JavaGraphShard.digest(
+            graphUniverseArgument(unwrapQuote(arguments.get(index + 1)), scratch));
       }
       if (argument.startsWith("-d=") && argument.length() > 3) {
         return JavaGraphShard.digest(graphUniverseArgument(argument.substring(3), scratch));
