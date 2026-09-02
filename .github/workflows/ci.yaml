@@ -78,6 +78,7 @@ jobs:
           gradle :scip-java:test
           --tests tests.GradleGraphLifecycleTest
           --tests tests.MavenGraphLifecycleTest
+          --tests tests.MavenGraphPluginTest
           --tests tests.GraphAggregateRunnerTest
           --tests tests.GradleBuildToolTest
           --no-daemon --no-configuration-cache --info

@@ -135,13 +135,28 @@ internal object MavenGraphPlugin {
     fun projectRepositorySelectionArguments(root: Path): List<String> {
         val config = root.resolve(".mvn/maven.config")
         if (!Files.isRegularFile(config)) return emptyList()
-        return Files.readAllLines(config, StandardCharsets.UTF_8)
+        val arguments =
+            Files.readAllLines(config, StandardCharsets.UTF_8)
             .map(String::trim)
-            .map { value -> value.removeSurrounding("\"") }
-            .filter { argument ->
-                argument.startsWith("-Dmaven.repo.local=") ||
-                    argument.startsWith("--define=maven.repo.local=")
+                .filter { value -> value.isNotEmpty() && !value.startsWith("#") }
+                .map(::normalizeConfigArgument)
+        return repositorySelectionArguments(arguments)
+    }
+
+    private fun normalizeConfigArgument(value: String): String {
+        val unquoted = value.removeSurrounding("\"")
+        for (prefix in listOf(
+            "-Dmaven.repo.local=",
+            "--define=maven.repo.local=",
+            "maven.repo.local=",
+            "--settings=",
+            "--global-settings=",
+        )) {
+            if (unquoted.startsWith(prefix)) {
+                return prefix + unquoted.removePrefix(prefix).removeSurrounding("\"")
             }
+        }
+        return unquoted
     }
 
     private fun installFile(source: Path, destination: Path) {
