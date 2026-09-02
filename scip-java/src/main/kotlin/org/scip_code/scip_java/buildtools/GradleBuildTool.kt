@@ -198,8 +198,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                     System.getProperty("java.io.tmpdir")?.let(Paths::get),
                 )
                 .distinct()
-        val processLock =
-            WINDOWS_GRADLE_LOCKS.computeIfAbsent(identity) { ReentrantLock() }
+        val processLock = WINDOWS_GRADLE_LOCKS.computeIfAbsent(identity) { ReentrantLock() }
         processLock.lock()
         var acquiredRoot = false
         try {
@@ -221,21 +220,14 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                     lock = acquired
                     Files.createDirectories(temporaryRoot)
                     acquiredRoot = true
-                    return WindowsGradleTemporaryRoot(
-                        temporaryRoot,
-                        opened,
-                        acquired,
-                        processLock,
-                    )
+                    return WindowsGradleTemporaryRoot(temporaryRoot, opened, acquired, processLock)
                 } catch (_: Exception) {
                     try {
                         lock?.release()
-                    } catch (_: Exception) {
-                    }
+                    } catch (_: Exception) {}
                     try {
                         channel?.close()
-                    } catch (_: Exception) {
-                    }
+                    } catch (_: Exception) {}
                     // Try the next OS-owned temporary root.
                 }
             }
@@ -268,11 +260,12 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         } catch (error: Throwable) {
             failure = error
         } finally {
-            for (close in listOf<() -> Unit>(
-                { invocation.lock?.release() },
-                { invocation.channel?.close() },
-                { invocation.processLock?.unlock() },
-            )) {
+            for (close in
+                listOf<() -> Unit>(
+                    { invocation.lock?.release() },
+                    { invocation.channel?.close() },
+                    { invocation.processLock?.unlock() },
+                )) {
                 try {
                     close()
                 } catch (error: Throwable) {
