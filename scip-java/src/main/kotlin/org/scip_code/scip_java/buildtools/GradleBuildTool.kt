@@ -79,10 +79,19 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
         return TemporaryFiles.withDirectory(index) { tmp ->
             val invocation = gradleInvocation(gradleWrapper, windowsWrapper)
+            var failure: Throwable? = null
             try {
                 runCompileCommand(invocation.temporaryRoot ?: tmp, invocation.command)
+            } catch (error: Throwable) {
+                failure = error
+                throw error
             } finally {
-                cleanupGradleInvocation(invocation, index.cleanup)
+                try {
+                    cleanupGradleInvocation(invocation, index.cleanup)
+                } catch (cleanupError: Throwable) {
+                    val original = failure ?: throw cleanupError
+                    original.addSuppressed(cleanupError)
+                }
             }
         }
     }
