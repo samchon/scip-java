@@ -425,8 +425,7 @@ class JavaGraphShardTest {
     if (java.io.File.separatorChar == '\\') {
       String portable = actualPath.replace('\\', '/');
       int separator = portable.indexOf('/', 3);
-      String mixed =
-          portable.substring(0, separator) + "\\" + portable.substring(separator + 1);
+      String mixed = portable.substring(0, separator) + "\\" + portable.substring(separator + 1);
       assertEquals(
           ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
           ScipOptionBuilder.graphUniverseArgument(mixed, scratch));
@@ -435,8 +434,7 @@ class JavaGraphShardTest {
           ScipOptionBuilder.graphUniverseArgument(
               actualPath.replace("Tool Root", "TOOL ROOT"), scratch));
       assertFalse(
-          ScipOptionBuilder.graphUniverseArgument(
-                  "-Avalue=" + scratch + "\\child,UPPER", scratch)
+          ScipOptionBuilder.graphUniverseArgument("-Avalue=" + scratch + "\\child,UPPER", scratch)
               .equals(
                   ScipOptionBuilder.graphUniverseArgument(
                       "-Avalue=" + scratch + "\\child,upper", scratch)));
@@ -444,9 +442,7 @@ class JavaGraphShardTest {
           ScipOptionBuilder.graphUniverseArgument(
               "-cp=" + scratch + "\\Child Space\\plugin.jar", scratch),
           ScipOptionBuilder.graphUniverseArgument(
-              "-cp="
-                  + root.resolve("Another Tool Root")
-                  + "/Child Space\\plugin.jar",
+              "-cp=" + root.resolve("Another Tool Root") + "/Child Space\\plugin.jar",
               root.resolve("Another Tool Root")));
     } else {
       assertFalse(
