@@ -9,6 +9,8 @@ import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.util.HexFormat
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 import org.scip_code.scip_java.Embedded
 import org.scip_code.scip_java.commands.IndexCommand
 
@@ -135,6 +137,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                     temporary.root,
                     temporary.channel,
                     temporary.lock,
+                    temporary.processLock,
                 )
             try {
                 Files.deleteIfExists(junction)
@@ -188,6 +191,10 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                         )
                 )
                 .take(24)
+        val processLock =
+            WINDOWS_GRADLE_LOCKS.computeIfAbsent(identity) { ReentrantLock() }
+        processLock.lock()
+        var acquiredRoot = false
         val candidates =
             listOfNotNull(
                     System.getenv("SystemRoot")?.let { Paths.get(it, "Temp") },
@@ -195,37 +202,47 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                     System.getProperty("java.io.tmpdir")?.let(Paths::get),
                 )
                 .distinct()
-        for (candidate in candidates) {
-            if (candidate.toString().any { it.code > 127 }) continue
-            var channel: FileChannel? = null
-            var lock: FileLock? = null
-            try {
-                Files.createDirectories(candidate)
-                val temporaryRoot = candidate.resolve("scip-java-gradle-$identity")
-                val opened =
-                    FileChannel.open(
-                        candidate.resolve("scip-java-gradle-$identity.lock"),
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.WRITE,
+        try {
+            for (candidate in candidates) {
+                if (candidate.toString().any { it.code > 127 }) continue
+                var channel: FileChannel? = null
+                var lock: FileLock? = null
+                try {
+                    Files.createDirectories(candidate)
+                    val temporaryRoot = candidate.resolve("scip-java-gradle-$identity")
+                    val opened =
+                        FileChannel.open(
+                            candidate.resolve("scip-java-gradle-$identity.lock"),
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.WRITE,
+                        )
+                    channel = opened
+                    val acquired = opened.lock()
+                    lock = acquired
+                    Files.createDirectories(temporaryRoot)
+                    acquiredRoot = true
+                    return WindowsGradleTemporaryRoot(
+                        temporaryRoot,
+                        opened,
+                        acquired,
+                        processLock,
                     )
-                channel = opened
-                val acquired = opened.lock()
-                lock = acquired
-                Files.createDirectories(temporaryRoot)
-                return WindowsGradleTemporaryRoot(temporaryRoot, opened, acquired)
-            } catch (_: Exception) {
-                try {
-                    lock?.release()
                 } catch (_: Exception) {
+                    try {
+                        lock?.release()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        channel?.close()
+                    } catch (_: Exception) {
+                    }
+                    // Try the next OS-owned temporary root.
                 }
-                try {
-                    channel?.close()
-                } catch (_: Exception) {
-                }
-                // Try the next OS-owned temporary root.
             }
+            throw IllegalStateException("Unable to create an ASCII-safe Gradle launcher directory")
+        } finally {
+            if (!acquiredRoot) processLock.unlock()
         }
-        throw IllegalStateException("Unable to create an ASCII-safe Gradle launcher directory")
     }
 
     private fun cleanupGradleInvocation(invocation: GradleInvocation, cleanup: Boolean) {
@@ -254,6 +271,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             for (close in listOf<() -> Unit>(
                 { invocation.lock?.release() },
                 { invocation.channel?.close() },
+                { invocation.processLock?.unlock() },
             )) {
                 try {
                     close()
@@ -339,12 +357,14 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val temporaryRoot: Path? = null,
         val channel: FileChannel? = null,
         val lock: FileLock? = null,
+        val processLock: ReentrantLock? = null,
     )
 
     private data class WindowsGradleTemporaryRoot(
         val root: Path,
         val channel: FileChannel,
         val lock: FileLock,
+        val processLock: ReentrantLock,
     )
 
     private companion object {
@@ -356,5 +376,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                 "scip-kotlinc.jar",
                 "scip-plugin.jar",
             )
+        private val WINDOWS_GRADLE_LOCKS =
+            ConcurrentHashMap<String, ReentrantLock>()
     }
 }
