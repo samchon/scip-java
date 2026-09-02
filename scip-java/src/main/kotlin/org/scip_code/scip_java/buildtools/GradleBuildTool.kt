@@ -191,10 +191,6 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                         )
                 )
                 .take(24)
-        val processLock =
-            WINDOWS_GRADLE_LOCKS.computeIfAbsent(identity) { ReentrantLock() }
-        processLock.lock()
-        var acquiredRoot = false
         val candidates =
             listOfNotNull(
                     System.getenv("SystemRoot")?.let { Paths.get(it, "Temp") },
@@ -202,6 +198,10 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                     System.getProperty("java.io.tmpdir")?.let(Paths::get),
                 )
                 .distinct()
+        val processLock =
+            WINDOWS_GRADLE_LOCKS.computeIfAbsent(identity) { ReentrantLock() }
+        processLock.lock()
+        var acquiredRoot = false
         try {
             for (candidate in candidates) {
                 if (candidate.toString().any { it.code > 127 }) continue
