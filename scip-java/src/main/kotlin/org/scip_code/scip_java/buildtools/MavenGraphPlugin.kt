@@ -41,6 +41,7 @@ internal object MavenGraphPlugin {
             StandardCharsets.UTF_8,
         )
         val probe = mutableListOf(mavenScript)
+        probe += projectRepositorySelectionArguments(index.workingDirectory)
         probe += repositorySelectionArguments(buildCommand)
         probe += "--batch-mode"
         probe += listOf("--file", probePom.toString())
@@ -129,6 +130,18 @@ internal object MavenGraphPlugin {
             index += 1
         }
         return output
+    }
+
+    fun projectRepositorySelectionArguments(root: Path): List<String> {
+        val config = root.resolve(".mvn/maven.config")
+        if (!Files.isRegularFile(config)) return emptyList()
+        return Files.readAllLines(config, StandardCharsets.UTF_8)
+            .map(String::trim)
+            .map { value -> value.removeSurrounding("\"") }
+            .filter { argument ->
+                argument.startsWith("-Dmaven.repo.local=") ||
+                    argument.startsWith("--define=maven.repo.local=")
+            }
     }
 
     private fun installFile(source: Path, destination: Path) {
