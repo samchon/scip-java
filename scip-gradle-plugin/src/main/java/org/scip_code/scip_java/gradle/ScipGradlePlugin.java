@@ -80,7 +80,9 @@ public class ScipGradlePlugin implements Plugin<Project> {
                           : null;
                   if (graphStore != null) {
                     graphCoordinator.register(task, graphStore);
-                    task.getOutputs().dir(graphStore.outputRoot().toFile());
+                    // The committed store is publication state, not a JavaCompile output. Gradle
+                    // deletes registered outputs before an out-of-date task runs; if compilation
+                    // then fails, that would erase CURRENT before doLast can publish a replacement.
                     task.doFirst(ignored -> graphStore.prepare());
                     task.doLast(
                         ignored ->
