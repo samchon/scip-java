@@ -380,8 +380,7 @@ class JavaGraphShardTest {
   }
 
   @Test
-  void graphUniverseNormalizesOnlyTheProducerScratchPath(@TempDir Path root)
-      throws IOException {
+  void graphUniverseNormalizesOnlyTheProducerScratchPath(@TempDir Path root) throws IOException {
     Path scratch = root.resolve("Tool Root");
     Files.createDirectories(scratch);
     Path firstPlugin = scratch.resolve("first.jar");
@@ -393,8 +392,7 @@ class JavaGraphShardTest {
     assertEquals(expectedDigest, ScipOptionBuilder.graphPluginDigest(firstPlugin));
     assertEquals(expectedDigest, ScipOptionBuilder.graphPluginDigest(secondPlugin));
     Files.writeString(secondPlugin, "different bytes");
-    assertFalse(
-        expectedDigest.equals(ScipOptionBuilder.graphPluginDigest(secondPlugin)));
+    assertFalse(expectedDigest.equals(ScipOptionBuilder.graphPluginDigest(secondPlugin)));
 
     String actualPath = scratch.resolve("plugin.jar").toString();
     String movedPath = root.resolve("Another Tool Root/plugin.jar").toString();
@@ -418,8 +416,7 @@ class JavaGraphShardTest {
         "v1|literal:" + encodedLiteral,
         ScipOptionBuilder.graphUniverseArgument(literalToken, scratch));
     String repeated =
-        ScipOptionBuilder.graphUniverseArgument(
-            actualPath + ",next=" + actualPath, scratch);
+        ScipOptionBuilder.graphUniverseArgument(actualPath + ",next=" + actualPath, scratch);
     assertEquals(2, count(repeated, "|tool"));
     assertEquals(
         ScipOptionBuilder.graphUniverseArgument("-Aİ=" + actualPath, scratch),
@@ -429,9 +426,7 @@ class JavaGraphShardTest {
       String portable = actualPath.replace('\\', '/');
       int separator = portable.indexOf('/', 3);
       String mixed =
-          portable.substring(0, separator)
-              + "\\"
-              + portable.substring(separator + 1);
+          portable.substring(0, separator) + "\\" + portable.substring(separator + 1);
       assertEquals(
           ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
           ScipOptionBuilder.graphUniverseArgument(mixed, scratch));

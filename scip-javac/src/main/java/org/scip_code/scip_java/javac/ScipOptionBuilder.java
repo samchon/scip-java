@@ -233,12 +233,10 @@ public class ScipOptionBuilder {
     char character = value.charAt(index);
     return Character.isWhitespace(character)
         || "=;:\"'".indexOf(character) >= 0
-        || (!before
-            && (character == '/' || (File.separatorChar == '\\' && character == '\\')));
+        || (!before && (character == '/' || (File.separatorChar == '\\' && character == '\\')));
   }
 
   private static void literal(StringBuilder identity, String value) {
     identity.append("|literal:").append(encodedValue(value));
   }
-
 }
