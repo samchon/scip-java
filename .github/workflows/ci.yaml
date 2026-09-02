@@ -67,6 +67,12 @@ jobs:
           --tests org.scip_code.scip_java.javac.JavaGraphShardTest
           --no-daemon --no-configuration-cache
 
+      - name: Gradle graph store validity
+        run: >-
+          gradle :scip-gradle-plugin:test
+          --tests org.scip_code.scip_java.gradle.GraphGenerationStoreTest
+          --no-daemon --no-configuration-cache
+
       - name: Gradle and Maven graph lifecycles
         run: >-
           gradle :scip-java:test

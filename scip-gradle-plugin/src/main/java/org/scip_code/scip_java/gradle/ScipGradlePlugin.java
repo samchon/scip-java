@@ -83,6 +83,17 @@ public class ScipGradlePlugin implements Plugin<Project> {
                     // The committed store is publication state, not a JavaCompile output. Gradle
                     // deletes registered outputs before an out-of-date task runs; if compilation
                     // then fails, that would erase CURRENT before doLast can publish a replacement.
+                    task.getOutputs()
+                        .upToDateWhen(
+                            ignored ->
+                                graphStore.matchesCurrent(
+                                    task.getSource().getFiles(), graphStore.universe(task)));
+                    task.getOutputs()
+                        .doNotCacheIf(
+                            "the committed Java graph is missing or stale",
+                            ignored ->
+                                !graphStore.matchesCurrent(
+                                    task.getSource().getFiles(), graphStore.universe(task)));
                     task.doFirst(ignored -> graphStore.prepare());
                     task.doLast(
                         ignored ->

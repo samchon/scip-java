@@ -74,6 +74,30 @@ final class GraphGenerationStore {
     return targetKey;
   }
 
+  /** Whether Gradle may reuse compiled outputs without bypassing a required graph refresh. */
+  boolean matchesCurrent(Set<java.io.File> taskSources, List<String> universe) {
+    try {
+      Path generation = currentGeneration();
+      if (generation == null) return false;
+      Set<String> declared = new LinkedHashSet<>();
+      for (java.io.File source : taskSources) {
+        declared.add(relativeSource(source.toPath().toAbsolutePath().normalize()));
+      }
+      if (!declared.equals(new LinkedHashSet<>(readLines(generation.resolve(DECLARED_SOURCES))))) {
+        return false;
+      }
+      if (!universe.equals(readLines(generation.resolve("UNIVERSE")))) return false;
+      for (Path shard : graphShards(generation)) {
+        ShardMetadata metadata = shardMetadata(shard);
+        if (!metadata.source().equals(shardSource(generation.relativize(shard)))) return false;
+        validateSource(metadata, shard);
+      }
+      return true;
+    } catch (IOException | RuntimeException ignored) {
+      return false;
+    }
+  }
+
   /** Start from the prior committed generation; no published pointer changes here. */
   void prepare() {
     try {

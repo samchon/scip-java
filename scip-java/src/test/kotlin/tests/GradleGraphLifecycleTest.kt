@@ -121,7 +121,6 @@ class GradleGraphLifecycleTest : BuildToolHarness() {
                 Files.deleteIfExists(artifact)
                 val cold = arguments.toMutableList()
                 cold[2] = temporary.toString()
-                cold.add(8, "--rerun-tasks")
                 val result = runScipJava(workspace, cold)
                 assertEquals(0, result.first, result.second)
                 return Files.readAllBytes(artifact)
