@@ -205,17 +205,11 @@ public class ScipOptionBuilder {
       literal(identity, argument.substring(cursor, match));
       identity.append("|tool");
       cursor = match + scratchPath.length();
-      if (File.separatorChar == '\\') {
-        int pathEnd = cursor;
-        while (pathEnd < argument.length() && !toolPathBoundary(argument.charAt(pathEnd))) {
-          pathEnd++;
-        }
-        if (pathEnd > cursor) {
-          identity
-              .append("|path:")
-              .append(encodedValue(comparablePath(argument.substring(cursor, pathEnd))));
-          cursor = pathEnd;
-        }
+      if (File.separatorChar == '\\'
+          && cursor < argument.length()
+          && (argument.charAt(cursor) == '/' || argument.charAt(cursor) == '\\')) {
+        identity.append("|separator");
+        cursor++;
       }
     }
     if (argument.isEmpty()) literal(identity, "");
@@ -247,10 +241,4 @@ public class ScipOptionBuilder {
     identity.append("|literal:").append(encodedValue(value));
   }
 
-  private static boolean toolPathBoundary(char character) {
-    return Character.isWhitespace(character)
-        || character == File.pathSeparatorChar
-        || character == '"'
-        || character == '\'';
-  }
 }
