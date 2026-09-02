@@ -32,8 +32,8 @@ public class ScipOptionBuilder {
   private static final String OLD_OUTPUT = setting("scip.old-output", "SCIP_OLD_JAVAC_OPTS");
 
   private static String setting(String property, String environment) {
-    String value = System.getenv(environment);
-    return value != null ? value : System.getProperty(property, "");
+    String value = System.getProperty(property);
+    return value != null ? value : System.getenv().getOrDefault(environment, "");
   }
 
   public void processArgument(String arg) {

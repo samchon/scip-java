@@ -78,27 +78,25 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
         return TemporaryFiles.withDirectory(index) { tmp ->
-            val invocation = gradleInvocation(tmp, gradleWrapper, windowsWrapper)
+            val invocation = gradleInvocation(gradleWrapper, windowsWrapper)
             try {
-                runCompileCommand(tmp, invocation.command)
+                runCompileCommand(invocation.temporaryRoot ?: tmp, invocation.command)
             } finally {
-                invocation.junction?.let(Files::deleteIfExists)
+                cleanupGradleInvocation(invocation)
             }
         }
     }
 
     private fun gradleInvocation(
-        tmp: Path,
         gradleWrapper: Path,
         windowsWrapper: Path,
     ): GradleInvocation =
         if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
-            // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME so its
-            // child Java command never round-trips the real Unicode workspace through the OEM
-            // code page. The process cwd remains the real project.
-            Files.createDirectories(tmp)
-            val junction = tmp.resolve("gradle-workspace")
-            Files.deleteIfExists(junction)
+            // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME and
+            // internal-tool directory so neither reaches its child JVM through the OEM code page.
+            // The process cwd remains the real project.
+            val temporaryRoot = windowsGradleTemporaryRoot()
+            val junction = temporaryRoot.resolve("workspace")
             val linked =
                 ProcessRunner.run(
                     listOf(
@@ -107,7 +105,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                         "/c",
                         "mklink /J \"%SCIP_GRADLE_LINK%\" \"%SCIP_GRADLE_TARGET%\" >nul",
                     ),
-                    tmp,
+                    temporaryRoot,
                     env =
                         mapOf(
                             "SCIP_GRADLE_LINK" to junction.toString(),
@@ -115,14 +113,50 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                         ),
                 )
             if (linked.exitCode != 0) {
+                Files.deleteIfExists(temporaryRoot)
                 throw IllegalStateException("Unable to create a Unicode-safe Gradle wrapper path")
             }
-            GradleInvocation(listOf(junction.resolve("gradlew.bat").toString()), junction)
+            GradleInvocation(
+                listOf(junction.resolve("gradlew.bat").toString()),
+                junction,
+                temporaryRoot,
+            )
         } else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper)) {
             GradleInvocation(listOf(gradleWrapper.toString()))
         } else {
             GradleInvocation(listOf("gradle"))
         }
+
+    private fun windowsGradleTemporaryRoot(): Path {
+        val candidates =
+            listOfNotNull(
+                    System.getenv("SystemRoot")?.let { Paths.get(it, "Temp") },
+                    System.getenv("ProgramData")?.let { Paths.get(it, "Temp") },
+                    System.getProperty("java.io.tmpdir")?.let(Paths::get),
+                )
+                .distinct()
+        for (candidate in candidates) {
+            if (candidate.toString().any { it.code > 127 }) continue
+            try {
+                Files.createDirectories(candidate)
+                return Files.createTempDirectory(candidate, "scip-java-gradle-")
+            } catch (_: Exception) {
+                // Try the next OS-owned temporary root.
+            }
+        }
+        throw IllegalStateException("Unable to create an ASCII-safe Gradle launcher directory")
+    }
+
+    private fun cleanupGradleInvocation(invocation: GradleInvocation) {
+        val junction = invocation.junction ?: return
+        // Never recurse while the workspace reparse point exists. A failed unlink intentionally
+        // leaks this small launcher directory rather than risking traversal into user sources.
+        Files.deleteIfExists(junction)
+        val temporaryRoot = invocation.temporaryRoot ?: return
+        if (!temporaryRoot.toFile().deleteRecursively() || Files.exists(temporaryRoot)) {
+            throw IllegalStateException("Unable to remove the Unicode-safe Gradle launcher")
+        }
+    }
 
     private fun runCompileCommand(tmp: Path, gradleCommand: List<String>): ProcessResult {
         val script = initScript(tmp).toString()
@@ -189,5 +223,6 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     private data class GradleInvocation(
         val command: List<String>,
         val junction: Path? = null,
+        val temporaryRoot: Path? = null,
     )
 }
