@@ -369,7 +369,6 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                 "scip-kotlinc.jar",
                 "scip-plugin.jar",
             )
-        private val WINDOWS_GRADLE_LOCKS =
-            ConcurrentHashMap<String, ReentrantLock>()
+        private val WINDOWS_GRADLE_LOCKS = ConcurrentHashMap<String, ReentrantLock>()
     }
 }
