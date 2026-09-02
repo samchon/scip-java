@@ -379,6 +379,43 @@ class JavaGraphShardTest {
     assertTrue(options.errors.isEmpty(), options.errors::toString);
   }
 
+  @Test
+  void graphUniverseNormalizesOnlyTheProducerScratchPath(@TempDir Path root)
+      throws IOException {
+    Path scratch = root.resolve("Tool Root");
+    Files.createDirectories(scratch);
+    Path firstPlugin = scratch.resolve("first.jar");
+    Path secondPlugin = scratch.resolve("second.jar");
+    Files.writeString(firstPlugin, "first");
+    Files.writeString(secondPlugin, "second");
+    assertFalse(
+        ScipOptionBuilder.graphPluginDigest(firstPlugin)
+            .equals(ScipOptionBuilder.graphPluginDigest(secondPlugin)));
+
+    String actualPath = scratch.resolve("plugin.jar").toString();
+    String movedPath = root.resolve("Another Tool Root/plugin.jar").toString();
+    assertEquals(
+        ScipOptionBuilder.graphUniverseArgument("-cp=" + actualPath, scratch),
+        ScipOptionBuilder.graphUniverseArgument(
+            "-cp=" + movedPath, root.resolve("Another Tool Root"))));
+    assertFalse(
+        ScipOptionBuilder.graphUniverseArgument("-Avalue=a\\b", scratch)
+            .equals(ScipOptionBuilder.graphUniverseArgument("-Avalue=a/b", scratch)));
+    assertFalse(
+        ScipOptionBuilder.graphUniverseArgument(
+                scratch + "-two" + java.io.File.separator + "plugin.jar", scratch)
+            .equals(ScipOptionBuilder.graphUniverseArgument(actualPath, scratch)));
+    assertFalse(
+        ScipOptionBuilder.graphUniverseArgument("${SCIP_JAVA_TOOL}", scratch)
+            .equals(ScipOptionBuilder.graphUniverseArgument(actualPath, scratch)));
+    if (java.io.File.separatorChar == '\\') {
+      assertEquals(
+          ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
+          ScipOptionBuilder.graphUniverseArgument(
+              actualPath.toUpperCase(java.util.Locale.ROOT), scratch));
+    }
+  }
+
   private static String compile(Path root, String source) {
     Path sourceRoot = root.resolve("source").toAbsolutePath();
     Path targetRoot = root.resolve("target").toAbsolutePath();
