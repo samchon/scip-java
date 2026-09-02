@@ -29,13 +29,17 @@ class MavenGraphPluginTest {
                 root,
                 listOf(
                     "--settings=cli settings.xml",
-                    "-Dmaven.repo.local=cli-override",
+                    "-D",
+                    "maven.repo.local",
+                    "cli-override",
                 ),
             )
         assertEquals(
             listOf(
                 "--settings=cli settings.xml",
-                "-Dmaven.repo.local=cli-override",
+                "-D",
+                "maven.repo.local",
+                "cli-override",
                 "--offline",
             ),
             effective,

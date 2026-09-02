@@ -124,6 +124,11 @@ internal object MavenGraphPlugin {
                             arguments[index + 1].startsWith("maven.repo.local=")
                     ) {
                         localRepository = listOf(argument, arguments[++index])
+                    } else if (
+                        index + 2 < arguments.size &&
+                            arguments[index + 1] == "maven.repo.local"
+                    ) {
+                        localRepository = listOf(argument, arguments[++index], arguments[++index])
                     }
                 }
                 settings == null &&
