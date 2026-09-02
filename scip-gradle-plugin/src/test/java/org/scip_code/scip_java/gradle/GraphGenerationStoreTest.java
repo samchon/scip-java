@@ -75,6 +75,9 @@ class GraphGenerationStoreTest {
 
     store.prepare();
     replace(store.staging().resolve("src/A.java.graph.json"), shard("src/A.java"));
+    replace(
+        store.staging().resolve(".universe/transient.args.d/invocation.args"),
+        "compiler scheduling state");
     marker(store.staging(), "src/A.java");
     store.commit(Set.of(firstSource.toFile()));
     String firstGeneration = current(store.outputRoot());
@@ -83,6 +86,7 @@ class GraphGenerationStoreTest {
             .resolve("src/A.java.graph.json")
             .toFile()
             .isFile());
+    assertFalse(Files.exists(committed(store.outputRoot(), firstGeneration).resolve(".universe")));
 
     store.prepare();
     replace(store.staging().resolve("src/A.java.graph.json"), "broken candidate\n");

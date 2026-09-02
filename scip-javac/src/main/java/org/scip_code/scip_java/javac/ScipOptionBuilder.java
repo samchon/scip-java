@@ -151,16 +151,6 @@ public class ScipOptionBuilder {
     String target = graphTarget();
     String targetKey = JavaGraphShard.digest(target);
     Path root = Paths.get(GRAPH_ROOT).resolve(".universe");
-    Path seen = root.resolve(".seen").resolve(targetKey);
-    Path output = root.resolve(targetKey + ".args");
-    Files.createDirectories(seen.getParent());
-    boolean firstInvocation;
-    try {
-      Files.createFile(seen);
-      firstInvocation = true;
-    } catch (FileAlreadyExistsException ignored) {
-      firstInvocation = false;
-    }
     List<String> invocation = new ArrayList<>();
     invocation.add("@invocation");
     Path plugin = Paths.get(PLUGINPATH).toAbsolutePath().normalize();
@@ -169,20 +159,20 @@ public class ScipOptionBuilder {
     for (String argument : oldArgs) {
       invocation.add(encodedValue(graphUniverseArgument(argument, plugin.getParent())));
     }
-    if (firstInvocation) {
-      Files.write(
-          output,
-          invocation,
-          StandardCharsets.UTF_8,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.TRUNCATE_EXISTING);
-    } else {
-      Files.write(
-          output,
-          invocation,
-          StandardCharsets.UTF_8,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.APPEND);
+    writeGraphInvocation(root, targetKey, invocation);
+  }
+
+  static void writeGraphInvocation(Path root, String targetKey, List<String> invocation)
+      throws IOException {
+    byte[] content = (String.join("\n", invocation) + "\n").getBytes(StandardCharsets.UTF_8);
+    String invocationKey = JavaGraphShard.digest(content);
+    Path directory = root.resolve(targetKey + ".args.d");
+    Path output = directory.resolve(invocationKey + ".args");
+    Files.createDirectories(directory);
+    try {
+      Files.write(output, content, StandardOpenOption.CREATE_NEW);
+    } catch (FileAlreadyExistsException ignored) {
+      // Equal invocations share a content-addressed file. The generation store validates it.
     }
   }
 

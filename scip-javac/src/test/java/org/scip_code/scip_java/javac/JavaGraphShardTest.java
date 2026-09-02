@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -448,6 +450,49 @@ class JavaGraphShardTest {
       assertFalse(
           ScipOptionBuilder.graphUniverseArgument(scratch + "\\child", scratch)
               .equals(ScipOptionBuilder.graphUniverseArgument(scratch + "/child", scratch)));
+    }
+  }
+
+  @Test
+  void graphUniverseWritesConcurrentInvocationsWithoutSharedAppendState(@TempDir Path root) {
+    List<String> first = List.of("@invocation", "@plugin", "plugin", "argument-a");
+    List<String> second = List.of("@invocation", "@plugin", "plugin", "argument-b");
+    var executor = Executors.newFixedThreadPool(8);
+    try {
+      List<CompletableFuture<Void>> writers =
+          java.util.stream.IntStream.range(0, 64)
+              .mapToObj(
+                  index ->
+                      CompletableFuture.runAsync(
+                          () -> {
+                            try {
+                              ScipOptionBuilder.writeGraphInvocation(
+                                  root, "target", index % 2 == 0 ? first : second);
+                            } catch (IOException exception) {
+                              throw new UncheckedIOException(exception);
+                            }
+                          },
+                          executor))
+              .toList();
+      writers.forEach(CompletableFuture::join);
+    } finally {
+      executor.shutdownNow();
+    }
+    Path directory = root.resolve("target.args.d");
+    try (var files = Files.list(directory)) {
+      List<Path> invocations = files.filter(Files::isRegularFile).sorted().toList();
+      assertEquals(2, invocations.size());
+      for (Path invocation : invocations) {
+        try {
+          assertEquals(
+              JavaGraphShard.digest(Files.readAllBytes(invocation)) + ".args",
+              invocation.getFileName().toString());
+        } catch (IOException exception) {
+          throw new UncheckedIOException(exception);
+        }
+      }
+    } catch (IOException exception) {
+      throw new UncheckedIOException(exception);
     }
   }
 

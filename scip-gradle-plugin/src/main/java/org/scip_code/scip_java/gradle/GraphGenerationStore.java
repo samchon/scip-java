@@ -164,6 +164,9 @@ final class GraphGenerationStore {
       }
       deleteEmptyDirectories(staging);
       deleteTree(staging.resolve(SEEN_ROOT));
+      // Maven consumes compiler invocation universes. Gradle owns its universe above and must not
+      // let the javac transport's scheduling records enter its committed generation.
+      deleteTree(staging.resolve(".universe"));
       writeAtomic(staging.resolve("TARGET"), List.of(target));
       List<String> orderedSources = new ArrayList<>();
       for (Path shard : graphShards(staging)) {

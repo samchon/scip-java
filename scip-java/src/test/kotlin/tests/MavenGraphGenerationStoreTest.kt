@@ -13,32 +13,45 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
-import org.junit.jupiter.api.io.TempDir
 import org.scip_code.scip_java.buildtools.MavenGraphGenerationStore
 
 class MavenGraphGenerationStoreTest {
     @Test
-    fun compilerUniverseIgnoresDuplicateAndReorderedInvocations(@TempDir root: Path) {
-        val store = MavenGraphGenerationStore(root.resolve("targetroot"), root, "maven:.")
-        val first = root.resolve("first.args")
-        val second = root.resolve("second.args")
-        val changed = root.resolve("changed.args")
-        Files.writeString(
-            first,
-            "@invocation\n@plugin\nplugin\narg-a\n@invocation\n@plugin\nplugin\narg-b\n" +
-                "@invocation\n@plugin\nplugin\narg-a\n",
-        )
-        Files.writeString(
-            second,
-            "@invocation\n@plugin\nplugin\narg-b\n@invocation\n@plugin\nplugin\narg-a\n",
-        )
-        Files.writeString(
-            changed,
-            "@invocation\n@plugin\nplugin\narg-c\n@invocation\n@plugin\nplugin\narg-a\n",
-        )
+    fun compilerUniverseIgnoresDuplicateAndReorderedInvocationHistory() {
+        withWorkspace { workspace ->
+            val source = workspace.resolve("src/A.java")
+            write(source, "class A {}\n")
+            val store =
+                MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
+            val targetKey = rawDigest("maven:.")
+            val first = listOf(invocation("arg-a"), invocation("arg-b"), invocation("arg-a"))
+            val second = listOf(invocation("arg-b"), invocation("arg-a"))
+            val changed = listOf(invocation("arg-c"), invocation("arg-a"))
 
-        assertEquals(store.compilerUniverseDigest(first), store.compilerUniverseDigest(second))
-        assertNotEquals(store.compilerUniverseDigest(first), store.compilerUniverseDigest(changed))
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            write(store.staging.resolve(".universe/$targetKey.args"), first.joinToString(""))
+            store.commit()
+            val firstGeneration = Files.readString(store.current)
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            writeInvocationDirectory(store.staging, targetKey, second)
+            store.commit()
+            assertEquals(firstGeneration, Files.readString(store.current))
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            writeInvocationDirectory(store.staging, targetKey, changed)
+            store.commit()
+            assertNotEquals(firstGeneration, Files.readString(store.current))
+
+            val malformed = workspace.resolve("malformed.args")
+            write(malformed, "@invocation\n")
+            assertFailsWith<IllegalArgumentException> { store.compilerUniverseDigest(malformed) }
+            write(malformed, "@invocation\n@plugin\n${encodedValue("not-a-digest")}\n")
+            assertFailsWith<IllegalArgumentException> { store.compilerUniverseDigest(malformed) }
+        }
     }
 
     @Test
@@ -171,6 +184,34 @@ class MavenGraphGenerationStoreTest {
         Files.createDirectories(path.parent)
         Files.writeString(path, text, StandardCharsets.UTF_8)
     }
+
+    private fun writeInvocationDirectory(
+        staging: Path,
+        targetKey: String,
+        invocations: List<String>,
+    ) {
+        for (invocation in invocations) {
+            write(
+                staging.resolve(".universe/$targetKey.args.d/${rawDigest(invocation)}.args"),
+                invocation,
+            )
+        }
+    }
+
+    private fun invocation(argument: String): String =
+        "@invocation\n@plugin\n${encodedValue("a".repeat(64))}\n${encodedValue(argument)}\n"
+
+    private fun encodedValue(value: String): String =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(value.toByteArray(StandardCharsets.UTF_8))
+
+    private fun rawDigest(value: String): String =
+        HexFormat.of()
+            .formatHex(
+                MessageDigest.getInstance("SHA-256")
+                    .digest(value.toByteArray(StandardCharsets.UTF_8))
+            )
 
     private fun shard(target: String, source: String): String =
         """{"schemaVersion":1,"target":"$target","source":"$source","checkerDigest":"${digest(source)}","diskDigest":"${digest(source)}","nodes":[],"edges":[],"unresolved":[]}"""
