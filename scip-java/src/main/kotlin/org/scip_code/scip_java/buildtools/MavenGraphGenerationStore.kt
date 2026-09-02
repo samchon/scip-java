@@ -77,7 +77,6 @@ internal class MavenGraphGenerationStore(
         metadata.forEach(::validateSource)
         val active = metadata.map(ShardMetadata::source).distinct().sortedWith(::compareUtf8)
         val targets = metadata.map(ShardMetadata::target).distinct().sortedWith(::compareUtf8)
-        materializeCompilerUniverses()
         reconcileCompilerUniverses(targets)
         canonicalizeCompilerUniverses()
         writeAtomic(staging.resolve("TARGETS"), targets)
@@ -427,15 +426,14 @@ internal class MavenGraphGenerationStore(
         val compilerUniverses = staging.resolve(".universe")
         if (Files.isDirectory(compilerUniverses)) {
             Files.list(compilerUniverses).use { paths ->
-                paths
-                    .filter(Files::isRegularFile)
-                    .filter { it.fileName.toString().endsWith(".args") }
-                    .sorted()
-                    .forEach { options ->
-                        rows +=
-                            "compilerTarget=${options.fileName}:" +
-                                compilerUniverseDigest(options)
+                paths.sorted().forEach { options ->
+                    val name = options.fileName.toString()
+                    if (Files.isRegularFile(options) && name.endsWith(".args")) {
+                        rows += "compilerTarget=$name:" + compilerUniverseDigest(options)
+                    } else if (Files.isDirectory(options) && name.endsWith(".args.d")) {
+                        rows += "compilerTarget=$name:" + compilerUniverseDirectoryDigest(options)
                     }
+                }
             }
         }
         return rows.distinct().sortedWith(::compareUtf8)
@@ -448,7 +446,10 @@ internal class MavenGraphGenerationStore(
     }
 
     private fun compilerUniverseText(input: Path): String =
-        compilerInvocations(input).distinct().sortedWith(::compareUtf8).joinToString(separator = "")
+        compilerInvocations(input)
+            .distinct()
+            .sortedWith(::compareUtf8)
+            .joinToString(separator = "")
 
     private fun compilerInvocations(input: Path): List<String> {
         val invocations = mutableListOf<List<String>>()
@@ -458,18 +459,24 @@ internal class MavenGraphGenerationStore(
                 current?.let(invocations::add)
                 current = mutableListOf(line)
             } else {
-                requireNotNull(current) { "compiler universe does not start with @invocation: $input" }
+                requireNotNull(current) {
+                        "compiler universe does not start with @invocation: $input"
+                    }
                     .add(line)
             }
         }
         current?.let(invocations::add)
         require(invocations.isNotEmpty()) { "compiler universe is empty: $input" }
         for (invocation in invocations) {
-            require(invocation.size >= 3 && invocation[0] == "@invocation" && invocation[1] == "@plugin") {
+            require(
+                invocation.size >= 3 && invocation[0] == "@invocation" && invocation[1] == "@plugin"
+            ) {
                 "compiler universe has a malformed invocation: $input"
             }
             val plugin = decodeUniverseValue(invocation[2], input)
-            require(plugin.matches(sha256)) { "compiler universe has an invalid plugin digest: $input" }
+            require(plugin.matches(sha256)) {
+                "compiler universe has an invalid plugin digest: $input"
+            }
             invocation.drop(3).forEach { decodeUniverseValue(it, input) }
         }
         return invocations.map { invocation ->
@@ -482,46 +489,10 @@ internal class MavenGraphGenerationStore(
         return try {
             String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8)
         } catch (exception: IllegalArgumentException) {
-            throw IllegalArgumentException("compiler universe has invalid base64: $input", exception)
-        }
-    }
-
-    private fun materializeCompilerUniverses() {
-        val root = staging.resolve(".universe")
-        if (!Files.isDirectory(root)) return
-        Files.list(root).use { paths ->
-            for (directory in paths.filter(Files::isDirectory).toList()) {
-                val name = directory.fileName.toString()
-                if (!name.endsWith(".args.d")) continue
-                val target = name.removeSuffix(".args.d")
-                require(target.matches(sha256)) { "invalid compiler universe target directory: $directory" }
-                val invocations =
-                    Files.list(directory).use { files ->
-                        files
-                            .filter(Files::isRegularFile)
-                            .sorted()
-                            .map { invocation ->
-                                val bytes = Files.readAllBytes(invocation)
-                                val expected = digest(bytes) + ".args"
-                                require(invocation.fileName.toString() == expected) {
-                                    "compiler universe invocation digest does not match: $invocation"
-                                }
-                                val parsed = compilerInvocations(invocation)
-                                require(parsed.size == 1) {
-                                    "compiler universe invocation file contains multiple records: $invocation"
-                                }
-                                parsed.single()
-                            }
-                            .toList()
-                    }
-                require(invocations.isNotEmpty()) { "compiler universe target is empty: $directory" }
-                val canonical = invocations.distinct().sortedWith(::compareUtf8).joinToString("")
-                writeAtomic(
-                    root.resolve("$target.args"),
-                    canonical.removeSuffix("\n").split("\n"),
-                )
-                deleteTree(directory)
-            }
+            throw IllegalArgumentException(
+                "compiler universe has invalid base64: $input",
+                exception,
+            )
         }
     }
 
@@ -529,26 +500,68 @@ internal class MavenGraphGenerationStore(
         val root = staging.resolve(".universe")
         if (!Files.isDirectory(root)) return
         Files.list(root).use { paths ->
-            for (input in
-                paths
-                    .filter(Files::isRegularFile)
-                    .filter { it.fileName.toString().endsWith(".args") }
-                    .toList()) {
-                val canonical = compilerUniverseText(input)
-                writeAtomic(input, canonical.removeSuffix("\n").split("\n"))
+            for (input in paths.toList()) {
+                val name = input.fileName.toString()
+                if (Files.isRegularFile(input) && name.endsWith(".args")) {
+                    writeCanonicalCompilerUniverse(input)
+                } else if (Files.isDirectory(input) && name.endsWith(".args.d")) {
+                    val target = name.removeSuffix(".args.d")
+                    require(target.matches(sha256)) {
+                        "invalid compiler universe target directory: $input"
+                    }
+                    val slots = Files.list(input).use { files -> files.sorted().toList() }
+                    require(slots.isNotEmpty()) { "compiler universe target is empty: $input" }
+                    for (slot in slots) {
+                        require(
+                            Files.isRegularFile(slot) &&
+                                slot.fileName.toString().removeSuffix(".args").matches(sha256)
+                        ) {
+                            "invalid compiler universe invocation slot: $slot"
+                        }
+                        val parsed = compilerInvocations(slot)
+                        require(parsed.size == 1) {
+                            "compiler universe slot contains multiple invocations: $slot"
+                        }
+                        writeCanonicalCompilerUniverse(slot)
+                    }
+                }
             }
         }
+    }
+
+    private fun writeCanonicalCompilerUniverse(input: Path) {
+        val canonical = compilerUniverseText(input)
+        writeAtomic(input, canonical.removeSuffix("\n").split("\n"))
+    }
+
+    private fun compilerUniverseDirectoryDigest(directory: Path): String {
+        val hash = MessageDigest.getInstance("SHA-256")
+        Files.list(directory).use { paths ->
+            for (input in paths.filter(Files::isRegularFile).sorted().toList()) {
+                update(hash, input.fileName.toString().toByteArray(StandardCharsets.UTF_8))
+                update(hash, compilerUniverseText(input).toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+        return HexFormat.of().formatHex(hash.digest())
     }
 
     private fun reconcileCompilerUniverses(targets: List<String>) {
         val root = staging.resolve(".universe")
         if (!Files.isDirectory(root)) return
         deleteTree(root.resolve(".seen"))
-        val active =
-            targets.map { digest(it.toByteArray(StandardCharsets.UTF_8)) + ".args" }.toSet()
+        val active = targets.map { digest(it.toByteArray(StandardCharsets.UTF_8)) }.toSet()
         Files.list(root).use { paths ->
-            for (path in paths.filter(Files::isRegularFile).toList()) {
-                if (path.fileName.toString() !in active) Files.deleteIfExists(path)
+            for (path in paths.toList()) {
+                val name = path.fileName.toString()
+                val target = name.removeSuffix(".args.d").removeSuffix(".args")
+                if (target !in active) {
+                    deleteTree(path)
+                } else if (
+                    name.endsWith(".args") &&
+                        Files.isDirectory(root.resolve("$target.args.d"))
+                ) {
+                    Files.deleteIfExists(path)
+                }
             }
         }
         deleteEmptyDirectories(root)

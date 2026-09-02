@@ -24,13 +24,29 @@ class MavenGraphGenerationStoreTest {
             val store =
                 MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
             val targetKey = rawDigest("maven:.")
-            val first = listOf(invocation("arg-a"), invocation("arg-b"), invocation("arg-a"))
-            val second = listOf(invocation("arg-b"), invocation("arg-a"))
-            val changed = listOf(invocation("arg-c"), invocation("arg-a"))
+            val first = mapOf("main" to invocation("arg-a"), "test" to invocation("arg-b"))
+            val second = mapOf("main" to invocation("arg-a"))
+            val changed = mapOf("main" to invocation("arg-c"))
+
+            val legacyFirst = workspace.resolve("legacy-first.args")
+            val legacySecond = workspace.resolve("legacy-second.args")
+            write(
+                legacyFirst,
+                listOf(invocation("arg-a"), invocation("arg-b"), invocation("arg-a"))
+                    .joinToString(""),
+            )
+            write(
+                legacySecond,
+                listOf(invocation("arg-b"), invocation("arg-a")).joinToString(""),
+            )
+            assertEquals(
+                store.compilerUniverseDigest(legacyFirst),
+                store.compilerUniverseDigest(legacySecond),
+            )
 
             store.prepare()
             write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
-            write(store.staging.resolve(".universe/$targetKey.args"), first.joinToString(""))
+            writeInvocationDirectory(store.staging, targetKey, first)
             store.commit()
             val firstGeneration = Files.readString(store.current)
 
@@ -188,11 +204,11 @@ class MavenGraphGenerationStoreTest {
     private fun writeInvocationDirectory(
         staging: Path,
         targetKey: String,
-        invocations: List<String>,
+        invocations: Map<String, String>,
     ) {
-        for (invocation in invocations) {
+        for ((slot, invocation) in invocations) {
             write(
-                staging.resolve(".universe/$targetKey.args.d/${rawDigest(invocation)}.args"),
+                staging.resolve(".universe/$targetKey.args.d/${rawDigest(slot)}.args"),
                 invocation,
             )
         }

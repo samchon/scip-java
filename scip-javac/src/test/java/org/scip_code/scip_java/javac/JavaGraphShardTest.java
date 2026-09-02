@@ -457,6 +457,17 @@ class JavaGraphShardTest {
   void graphUniverseWritesConcurrentInvocationsWithoutSharedAppendState(@TempDir Path root) {
     List<String> first = List.of("@invocation", "@plugin", "plugin", "argument-a");
     List<String> second = List.of("@invocation", "@plugin", "plugin", "argument-b");
+    String firstSlot = JavaGraphShard.digest("main-output");
+    String secondSlot = JavaGraphShard.digest("test-output");
+    assertEquals(
+        JavaGraphShard.digest(
+            ScipOptionBuilder.graphUniverseArgument(root.resolve("classes").toString(), root)),
+        ScipOptionBuilder.graphInvocationSlot(
+            List.of("-classpath", "dependency.jar", "-d", root.resolve("classes").toString()),
+            root));
+    assertEquals(
+        JavaGraphShard.digest("default-output"),
+        ScipOptionBuilder.graphInvocationSlot(List.of("-classpath", "dependency.jar"), root));
     var executor = Executors.newFixedThreadPool(8);
     try {
       List<CompletableFuture<Void>> writers =
@@ -467,7 +478,10 @@ class JavaGraphShardTest {
                           () -> {
                             try {
                               ScipOptionBuilder.writeGraphInvocation(
-                                  root, "target", index % 2 == 0 ? first : second);
+                                  root,
+                                  "target",
+                                  index % 2 == 0 ? firstSlot : secondSlot,
+                                  index % 2 == 0 ? first : second);
                             } catch (IOException exception) {
                               throw new UncheckedIOException(exception);
                             }
@@ -482,15 +496,25 @@ class JavaGraphShardTest {
     try (var files = Files.list(directory)) {
       List<Path> invocations = files.filter(Files::isRegularFile).sorted().toList();
       assertEquals(2, invocations.size());
-      for (Path invocation : invocations) {
-        try {
-          assertEquals(
-              JavaGraphShard.digest(Files.readAllBytes(invocation)) + ".args",
-              invocation.getFileName().toString());
-        } catch (IOException exception) {
-          throw new UncheckedIOException(exception);
-        }
-      }
+      assertEquals(
+          List.of(firstSlot + ".args", secondSlot + ".args").stream().sorted().toList(),
+          invocations.stream().map(path -> path.getFileName().toString()).sorted().toList());
+      assertEquals(
+          List.of(first, second).stream()
+              .map(lines -> String.join("\n", lines) + "\n")
+              .sorted()
+              .toList(),
+          invocations.stream()
+              .map(
+                  invocation -> {
+                    try {
+                      return Files.readString(invocation);
+                    } catch (IOException exception) {
+                      throw new UncheckedIOException(exception);
+                    }
+                  })
+              .sorted()
+              .toList());
     } catch (IOException exception) {
       throw new UncheckedIOException(exception);
     }

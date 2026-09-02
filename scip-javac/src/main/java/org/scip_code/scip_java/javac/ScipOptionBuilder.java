@@ -4,11 +4,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -159,20 +160,54 @@ public class ScipOptionBuilder {
     for (String argument : oldArgs) {
       invocation.add(encodedValue(graphUniverseArgument(argument, plugin.getParent())));
     }
-    writeGraphInvocation(root, targetKey, invocation);
+    writeGraphInvocation(
+        root, targetKey, graphInvocationSlot(oldArgs, plugin.getParent()), invocation);
   }
 
-  static void writeGraphInvocation(Path root, String targetKey, List<String> invocation)
+  static String graphInvocationSlot(List<String> arguments, Path scratch) {
+    for (int index = 0; index < arguments.size(); index++) {
+      String argument = arguments.get(index);
+      if ("-d".equals(argument) && index + 1 < arguments.size()) {
+        return JavaGraphShard.digest(graphUniverseArgument(arguments.get(index + 1), scratch));
+      }
+      if (argument.startsWith("-d=") && argument.length() > 3) {
+        return JavaGraphShard.digest(graphUniverseArgument(argument.substring(3), scratch));
+      }
+    }
+    return JavaGraphShard.digest("default-output");
+  }
+
+  static void writeGraphInvocation(
+      Path root, String targetKey, String slotKey, List<String> invocation)
       throws IOException {
     byte[] content = (String.join("\n", invocation) + "\n").getBytes(StandardCharsets.UTF_8);
-    String invocationKey = JavaGraphShard.digest(content);
     Path directory = root.resolve(targetKey + ".args.d");
-    Path output = directory.resolve(invocationKey + ".args");
+    Path output = directory.resolve(slotKey + ".args");
     Files.createDirectories(directory);
+    Path temporary =
+        directory.resolve(
+            slotKey
+                + ".tmp-"
+                + ProcessHandle.current().pid()
+                + "-"
+                + Thread.currentThread().getId());
+    Files.write(
+        temporary,
+        content,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING);
     try {
-      Files.write(output, content, StandardOpenOption.CREATE_NEW);
-    } catch (FileAlreadyExistsException ignored) {
-      // Equal invocations share a content-addressed file. The generation store validates it.
+      try {
+        Files.move(
+            temporary,
+            output,
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING);
+      } catch (AtomicMoveNotSupportedException ignored) {
+        Files.move(temporary, output, StandardCopyOption.REPLACE_EXISTING);
+      }
+    } finally {
+      Files.deleteIfExists(temporary);
     }
   }
 
