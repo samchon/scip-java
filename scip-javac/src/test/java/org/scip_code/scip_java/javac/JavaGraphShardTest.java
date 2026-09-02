@@ -409,9 +409,18 @@ class JavaGraphShardTest {
         ScipOptionBuilder.graphUniverseArgument(
                 scratch + "-two" + java.io.File.separator + "plugin.jar", scratch)
             .equals(ScipOptionBuilder.graphUniverseArgument(actualPath, scratch)));
-    assertFalse(
-        ScipOptionBuilder.graphUniverseArgument("${SCIP_JAVA_TOOL}", scratch)
-            .equals(ScipOptionBuilder.graphUniverseArgument(actualPath, scratch)));
+    String literalToken = "${SCIP_JAVA_TOOL}";
+    String encodedLiteral =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(literalToken.getBytes(StandardCharsets.UTF_8));
+    assertEquals(
+        "v1|literal:" + encodedLiteral,
+        ScipOptionBuilder.graphUniverseArgument(literalToken, scratch));
+    String repeated =
+        ScipOptionBuilder.graphUniverseArgument(
+            actualPath + java.io.File.pathSeparator + actualPath, scratch);
+    assertEquals(2, count(repeated, "|tool"));
     assertEquals(
         ScipOptionBuilder.graphUniverseArgument("-Aİ=" + actualPath, scratch),
         ScipOptionBuilder.graphUniverseArgument(
@@ -429,7 +438,7 @@ class JavaGraphShardTest {
       assertEquals(
           ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
           ScipOptionBuilder.graphUniverseArgument(
-              actualPath.toUpperCase(java.util.Locale.ROOT), scratch));
+              actualPath.replace("Tool Root", "TOOL ROOT"), scratch));
     } else {
       assertFalse(
           ScipOptionBuilder.graphUniverseArgument(scratch + "\\child", scratch)
