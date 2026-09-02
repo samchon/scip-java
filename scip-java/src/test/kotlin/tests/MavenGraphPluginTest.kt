@@ -24,20 +24,21 @@ class MavenGraphPluginTest {
             """.trimIndent(),
         )
 
-        val project = MavenGraphPlugin.projectRepositorySelectionArguments(root)
+        val effective =
+            MavenGraphPlugin.effectiveRepositorySelectionArguments(
+                root,
+                listOf(
+                    "--settings=cli settings.xml",
+                    "-Dmaven.repo.local=cli-override",
+                ),
+            )
         assertEquals(
             listOf(
-                "--settings",
-                "settings with spaces.xml",
-                "-D",
-                "maven.repo.local=repository with spaces",
+                "--settings=cli settings.xml",
+                "-Dmaven.repo.local=cli-override",
                 "--offline",
             ),
-            project,
-        )
-        assertEquals(
-            "-Dmaven.repo.local=cli-override",
-            (project + "-Dmaven.repo.local=cli-override").last(),
+            effective,
         )
     }
 }
