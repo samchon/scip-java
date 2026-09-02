@@ -52,6 +52,12 @@ class MavenGraphGenerationStoreTest {
 
             store.prepare()
             write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            Files.createDirectories(store.staging.resolve(".universe/$targetKey.args"))
+            assertFailsWith<IllegalArgumentException> { store.commit() }
+            assertEquals(firstGeneration, Files.readString(store.current))
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
             writeInvocationDirectory(store.staging, targetKey, second)
             store.commit()
             assertEquals(firstGeneration, Files.readString(store.current))

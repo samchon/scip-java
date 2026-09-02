@@ -2,6 +2,7 @@ package org.scip_code.scip_java.javac;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -14,8 +15,11 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ScipOptionBuilder {
+  private static final ConcurrentHashMap<Path, Object> GRAPH_INVOCATION_LOCKS =
+      new ConcurrentHashMap<>();
   private String previousArg = "";
   private final ArrayList<String> oldArgs = new ArrayList<>();
   private final ArrayList<String> result = new ArrayList<>();
@@ -178,12 +182,27 @@ public class ScipOptionBuilder {
   }
 
   static void writeGraphInvocation(
-      Path root, String targetKey, String slotKey, List<String> invocation)
-      throws IOException {
+      Path root, String targetKey, String slotKey, List<String> invocation) throws IOException {
     byte[] content = (String.join("\n", invocation) + "\n").getBytes(StandardCharsets.UTF_8);
     Path directory = root.resolve(targetKey + ".args.d");
     Path output = directory.resolve(slotKey + ".args");
     Files.createDirectories(directory);
+    Object processLock = GRAPH_INVOCATION_LOCKS.computeIfAbsent(output, ignored -> new Object());
+    synchronized (processLock) {
+      Path locks = root.resolve(".locks");
+      Files.createDirectories(locks);
+      Path lockFile = locks.resolve(targetKey + "-" + slotKey + ".lock");
+      try (FileChannel channel =
+              FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+          var ignored = channel.lock()) {
+        writeGraphInvocation(output, content);
+      }
+    }
+  }
+
+  private static void writeGraphInvocation(Path output, byte[] content) throws IOException {
+    Path directory = output.getParent();
+    String slotKey = output.getFileName().toString().replaceFirst("\\.args$", "");
     Path temporary =
         directory.resolve(
             slotKey
@@ -192,17 +211,11 @@ public class ScipOptionBuilder {
                 + "-"
                 + Thread.currentThread().getId());
     Files.write(
-        temporary,
-        content,
-        StandardOpenOption.CREATE,
-        StandardOpenOption.TRUNCATE_EXISTING);
+        temporary, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
     try {
       try {
         Files.move(
-            temporary,
-            output,
-            StandardCopyOption.ATOMIC_MOVE,
-            StandardCopyOption.REPLACE_EXISTING);
+            temporary, output, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
       } catch (AtomicMoveNotSupportedException ignored) {
         Files.move(temporary, output, StandardCopyOption.REPLACE_EXISTING);
       }

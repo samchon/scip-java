@@ -77,6 +77,7 @@ jobs:
         run: >-
           gradle :scip-java:test
           --tests tests.GradleGraphLifecycleTest
+          --tests tests.MavenGraphGenerationStoreTest
           --tests tests.MavenGraphLifecycleTest
           --tests tests.MavenGraphPluginTest
           --tests tests.GraphAggregateRunnerTest

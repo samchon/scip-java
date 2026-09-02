@@ -556,7 +556,15 @@ internal class MavenGraphGenerationStore(
                 val target = name.removeSuffix(".args.d").removeSuffix(".args")
                 if (target !in active) {
                     deleteTree(path)
-                } else if (
+                    continue
+                }
+                require(
+                    (name.endsWith(".args") && Files.isRegularFile(path)) ||
+                        (name.endsWith(".args.d") && Files.isDirectory(path))
+                ) {
+                    "compiler universe root has an invalid type: $path"
+                }
+                if (
                     name.endsWith(".args") &&
                         Files.isDirectory(root.resolve("$target.args.d"))
                 ) {

@@ -252,9 +252,20 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             val universes =
                 paths
                     .filter(Files::isRegularFile)
-                    .filter { it.parent?.parent?.fileName?.toString() == generation }
-                    .filter { it.parent.fileName.toString() == ".universe" }
                     .filter { it.fileName.toString().endsWith(".args") }
+                    .filter { path ->
+                        val universe =
+                            if (path.parent.fileName.toString().endsWith(".args.d"))
+                                path.parent.parent
+                            else path.parent
+                        universe.fileName.toString() == ".universe" &&
+                            universe.parent.fileName.toString() == generation
+                    }
+                    .map { path ->
+                        if (path.parent.fileName.toString().endsWith(".args.d")) path.parent
+                        else path
+                    }
+                    .distinct()
                     .toList()
             universes.size
         }
