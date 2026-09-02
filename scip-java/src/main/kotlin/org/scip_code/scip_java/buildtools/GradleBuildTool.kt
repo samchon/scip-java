@@ -78,40 +78,43 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
         return TemporaryFiles.withDirectory(index) { tmp ->
-            val invocation = gradleInvocation(tmp, gradleWrapper, windowsWrapper)
-            runCompileCommand(tmp, invocation)
+            val command = gradleCommand(gradleWrapper, windowsWrapper)
+            runCompileCommand(tmp, command)
         }
     }
 
-    private fun gradleInvocation(
-        tmp: Path,
+    private fun gradleCommand(
         gradleWrapper: Path,
         windowsWrapper: Path,
-    ): GradleInvocation =
+    ): List<String> =
         if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
-            // A project wrapper launches its JVM through cmd.exe's active code page. Enter through
-            // an ASCII-only forwarder, switch that boundary to UTF-8, and only then expand the
-            // Unicode wrapper path and build arguments.
-            val forwarder = tmp.resolve("gradle-forwarder.cmd")
-            Files.writeString(
-                forwarder,
-                "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\nchcp 65001 >nul\r\ncall \"%SCIP_GRADLE_WRAPPER%\" %*\r\nexit /b %errorlevel%\r\n",
-                StandardCharsets.US_ASCII,
-            )
-            GradleInvocation(
-                listOf(forwarder.toString()),
-                mapOf("SCIP_GRADLE_WRAPPER" to windowsWrapper.toString()),
-            )
+            // ProcessBuilder launches a batch file through the active OEM code page. Invoke the
+            // same wrapper main class through Java's UTF-16 Windows process boundary instead.
+            val wrapperJar = index.workingDirectory.resolve("gradle/wrapper/gradle-wrapper.jar")
+            if (!Files.isRegularFile(wrapperJar)) {
+                listOf(windowsWrapper.toString())
+            } else {
+                val javaHome =
+                    System.getenv("JAVA_HOME")?.let(Paths::get)
+                        ?: Paths.get(System.getProperty("java.home"))
+                val java = javaHome.resolve("bin/java.exe")
+                listOf(
+                    if (Files.isRegularFile(java)) java.toString() else "java",
+                    "-classpath",
+                    wrapperJar.toString(),
+                    "org.gradle.wrapper.GradleWrapperMain",
+                )
+            }
         } else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper)) {
-            GradleInvocation(listOf(gradleWrapper.toString()))
+            listOf(gradleWrapper.toString())
         } else {
-            GradleInvocation(listOf("gradle"))
+            listOf("gradle")
         }
 
-    private fun runCompileCommand(tmp: Path, invocation: GradleInvocation): ProcessResult {
+    private fun runCompileCommand(tmp: Path, gradleCommand: List<String>): ProcessResult {
         val script = initScript(tmp).toString()
         val cmd = mutableListOf<String>()
-        cmd += invocation.command
+        cmd += gradleCommand
         if (index.graphOutput == null) cmd += "--no-daemon"
         cmd += "--init-script"
         cmd += script
@@ -131,8 +134,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         }
 
         if (index.graphOutput == null) targetroot().toFile().deleteRecursively()
-        val result =
-            index.app.runProcess(cmd, env = invocation.environment + mapOf("TERM" to "dumb"))
+        val result = index.app.runProcess(cmd, env = mapOf("TERM" to "dumb"))
         return Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: result
     }
 
@@ -172,8 +174,4 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     private fun groovyString(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
-    private data class GradleInvocation(
-        val command: List<String>,
-        val environment: Map<String, String> = emptyMap(),
-    )
 }

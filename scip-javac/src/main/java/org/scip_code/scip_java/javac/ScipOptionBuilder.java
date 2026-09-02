@@ -20,16 +20,21 @@ public class ScipOptionBuilder {
   private final ArrayList<String> result = new ArrayList<>();
   private boolean isClasspathUpdated = false;
 
-  public static final String ERRORPATH = System.getProperty("scip.errorpath", "");
-  private static final String PLUGINPATH = System.getProperty("scip.pluginpath", "");
-  private static final String SOURCEROOT = System.getProperty("scip.sourceroot", "");
-  private static final String TARGETROOT = System.getProperty("scip.targetroot", "");
-  private static final String GRAPH_ROOT = System.getProperty("scip.graph.root", "");
-  private static final String GRAPH_TARGET = System.getProperty("scip.graph.target", "");
+  public static final String ERRORPATH = setting("scip.errorpath", "SCIP_ERRORPATH");
+  private static final String PLUGINPATH = setting("scip.pluginpath", "SCIP_PLUGINPATH");
+  private static final String SOURCEROOT = setting("scip.sourceroot", "SCIP_SOURCEROOT");
+  private static final String TARGETROOT = setting("scip.targetroot", "SCIP_TARGETROOT");
+  private static final String GRAPH_ROOT = setting("scip.graph.root", "SCIP_GRAPH_ROOT");
+  private static final String GRAPH_TARGET = setting("scip.graph.target", "SCIP_GRAPH_TARGET");
   private static final boolean GRAPH_ENABLED =
-      Boolean.parseBoolean(System.getProperty("scip.graph.enabled", "false"));
-  private static final String OUTPUT = System.getProperty("scip.output", "");
-  private static final String OLD_OUTPUT = System.getProperty("scip.old-output", "");
+      Boolean.parseBoolean(setting("scip.graph.enabled", "SCIP_GRAPH_ENABLED"));
+  private static final String OUTPUT = setting("scip.output", "SCIP_OUTPUT");
+  private static final String OLD_OUTPUT = setting("scip.old-output", "SCIP_OLD_JAVAC_OPTS");
+
+  private static String setting(String property, String environment) {
+    String value = System.getProperty(property);
+    return value != null ? value : System.getenv().getOrDefault(environment, "");
+  }
 
   public void processArgument(String arg) {
     oldArgs.add(arg);

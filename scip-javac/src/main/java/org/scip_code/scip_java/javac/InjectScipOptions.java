@@ -24,7 +24,8 @@ public class InjectScipOptions {
    *     javac @$NEW_OPTIONS_PATH
    * </pre>
    *
-   * <p>Requires the following system properties:
+   * <p>Requires the following system properties, or their uppercase {@code SCIP_*} environment
+   * counterparts when a Windows command wrapper must preserve Unicode values:
    *
    * <ul>
    *   <li>-Dscip.output=PATH: the file to write the updated compiler options
