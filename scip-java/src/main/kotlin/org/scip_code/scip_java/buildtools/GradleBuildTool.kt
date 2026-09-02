@@ -82,7 +82,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             try {
                 runCompileCommand(invocation.temporaryRoot ?: tmp, invocation.command)
             } finally {
-                cleanupGradleInvocation(invocation)
+                cleanupGradleInvocation(invocation, index.cleanup)
             }
         }
     }
@@ -97,30 +97,39 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             // The process cwd remains the real project.
             val temporaryRoot = windowsGradleTemporaryRoot()
             val junction = temporaryRoot.resolve("workspace")
-            val linked =
-                ProcessRunner.run(
-                    listOf(
-                        "cmd.exe",
-                        "/d",
-                        "/c",
-                        "mklink /J \"%SCIP_GRADLE_LINK%\" \"%SCIP_GRADLE_TARGET%\" >nul",
-                    ),
-                    temporaryRoot,
-                    env =
-                        mapOf(
-                            "SCIP_GRADLE_LINK" to junction.toString(),
-                            "SCIP_GRADLE_TARGET" to index.workingDirectory.toString(),
+            val provisional = GradleInvocation(emptyList(), junction, temporaryRoot)
+            try {
+                val linked =
+                    ProcessRunner.run(
+                        listOf(
+                            "cmd.exe",
+                            "/d",
+                            "/c",
+                            "mklink /J \"%SCIP_GRADLE_LINK%\" \"%SCIP_GRADLE_TARGET%\" >nul",
                         ),
+                        temporaryRoot,
+                        env =
+                            mapOf(
+                                "SCIP_GRADLE_LINK" to junction.toString(),
+                                "SCIP_GRADLE_TARGET" to index.workingDirectory.toString(),
+                            ),
+                    )
+                if (linked.exitCode != 0) {
+                    throw IllegalStateException(
+                        "Unable to create a Unicode-safe Gradle wrapper path"
+                    )
+                }
+                provisional.copy(
+                    command = listOf(junction.resolve("gradlew.bat").toString())
                 )
-            if (linked.exitCode != 0) {
-                Files.deleteIfExists(temporaryRoot)
-                throw IllegalStateException("Unable to create a Unicode-safe Gradle wrapper path")
+            } catch (error: Throwable) {
+                try {
+                    cleanupGradleInvocation(provisional, index.cleanup)
+                } catch (cleanupError: Throwable) {
+                    error.addSuppressed(cleanupError)
+                }
+                throw error
             }
-            GradleInvocation(
-                listOf(junction.resolve("gradlew.bat").toString()),
-                junction,
-                temporaryRoot,
-            )
         } else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper)) {
             GradleInvocation(listOf(gradleWrapper.toString()))
         } else {
@@ -147,15 +156,22 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         throw IllegalStateException("Unable to create an ASCII-safe Gradle launcher directory")
     }
 
-    private fun cleanupGradleInvocation(invocation: GradleInvocation) {
+    private fun cleanupGradleInvocation(invocation: GradleInvocation, cleanup: Boolean) {
         val junction = invocation.junction ?: return
-        // Never recurse while the workspace reparse point exists. A failed unlink intentionally
-        // leaks this small launcher directory rather than risking traversal into user sources.
+        // Never recurse here. Every removal is one exact owned path, so a recreated reparse point
+        // can only be unlinked or make the root deletion fail; it cannot lead into user sources.
         Files.deleteIfExists(junction)
         val temporaryRoot = invocation.temporaryRoot ?: return
-        if (!temporaryRoot.toFile().deleteRecursively() || Files.exists(temporaryRoot)) {
-            throw IllegalStateException("Unable to remove the Unicode-safe Gradle launcher")
+        if (!cleanup) {
+            index.app.reporter.info(
+                "scip-java: retained Windows Gradle launcher files at $temporaryRoot"
+            )
+            return
         }
+        for (name in WINDOWS_GRADLE_TEMPORARY_FILES) {
+            Files.deleteIfExists(temporaryRoot.resolve(name))
+        }
+        Files.deleteIfExists(temporaryRoot)
     }
 
     private fun runCompileCommand(tmp: Path, gradleCommand: List<String>): ProcessResult {
@@ -225,4 +241,15 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val junction: Path? = null,
         val temporaryRoot: Path? = null,
     )
+
+    private companion object {
+        private val WINDOWS_GRADLE_TEMPORARY_FILES =
+            listOf(
+                "errorpath.txt",
+                "gradle-plugin.jar",
+                "init-script.gradle",
+                "scip-kotlinc.jar",
+                "scip-plugin.jar",
+            )
+    }
 }
