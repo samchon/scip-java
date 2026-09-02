@@ -78,37 +78,50 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
         return TemporaryFiles.withDirectory(index) { tmp ->
-            val command = gradleCommand(gradleWrapper, windowsWrapper)
-            runCompileCommand(tmp, command)
+            val invocation = gradleInvocation(tmp, gradleWrapper, windowsWrapper)
+            try {
+                runCompileCommand(tmp, invocation.command)
+            } finally {
+                invocation.junction?.let(Files::deleteIfExists)
+            }
         }
     }
 
-    private fun gradleCommand(
+    private fun gradleInvocation(
+        tmp: Path,
         gradleWrapper: Path,
         windowsWrapper: Path,
-    ): List<String> =
+    ): GradleInvocation =
         if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
-            // ProcessBuilder launches a batch file through the active OEM code page. Invoke the
-            // same wrapper main class through Java's UTF-16 Windows process boundary instead.
-            val wrapperJar = index.workingDirectory.resolve("gradle/wrapper/gradle-wrapper.jar")
-            if (!Files.isRegularFile(wrapperJar)) {
-                listOf(windowsWrapper.toString())
-            } else {
-                val javaHome =
-                    System.getenv("JAVA_HOME")?.let(Paths::get)
-                        ?: Paths.get(System.getProperty("java.home"))
-                val java = javaHome.resolve("bin/java.exe")
-                listOf(
-                    if (Files.isRegularFile(java)) java.toString() else "java",
-                    "-classpath",
-                    wrapperJar.toString(),
-                    "org.gradle.wrapper.GradleWrapperMain",
+            // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME so its
+            // child Java command never round-trips the real Unicode workspace through the OEM
+            // code page. The process cwd remains the real project.
+            Files.createDirectories(tmp)
+            val junction = tmp.resolve("gradle-workspace")
+            Files.deleteIfExists(junction)
+            val linked =
+                ProcessRunner.run(
+                    listOf(
+                        "cmd.exe",
+                        "/d",
+                        "/c",
+                        "mklink /J \"%SCIP_GRADLE_LINK%\" \"%SCIP_GRADLE_TARGET%\" >nul",
+                    ),
+                    tmp,
+                    env =
+                        mapOf(
+                            "SCIP_GRADLE_LINK" to junction.toString(),
+                            "SCIP_GRADLE_TARGET" to index.workingDirectory.toString(),
+                        ),
                 )
+            if (linked.exitCode != 0) {
+                throw IllegalStateException("Unable to create a Unicode-safe Gradle wrapper path")
             }
+            GradleInvocation(listOf(junction.resolve("gradlew.bat").toString()), junction)
         } else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper)) {
-            listOf(gradleWrapper.toString())
+            GradleInvocation(listOf(gradleWrapper.toString()))
         } else {
-            listOf("gradle")
+            GradleInvocation(listOf("gradle"))
         }
 
     private fun runCompileCommand(tmp: Path, gradleCommand: List<String>): ProcessResult {
@@ -118,7 +131,6 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         if (index.graphOutput == null) cmd += "--no-daemon"
         cmd += "--init-script"
         cmd += script
-        cmd += "-Dscip.targetroot=${targetroot()}"
         if (index.graphOutput == null) cmd += "-Pkotlin.compiler.execution.strategy=in-process"
         val defaults =
             if (index.graphOutput == null)
@@ -174,4 +186,8 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     private fun groovyString(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
+    private data class GradleInvocation(
+        val command: List<String>,
+        val junction: Path? = null,
+    )
 }
