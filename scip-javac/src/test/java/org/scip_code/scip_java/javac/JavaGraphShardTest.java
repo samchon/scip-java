@@ -401,7 +401,7 @@ class JavaGraphShardTest {
     assertEquals(
         ScipOptionBuilder.graphUniverseArgument("-cp=" + actualPath, scratch),
         ScipOptionBuilder.graphUniverseArgument(
-            "-cp=" + movedPath, root.resolve("Another Tool Root"))));
+            "-cp=" + movedPath, root.resolve("Another Tool Root")));
     assertFalse(
         ScipOptionBuilder.graphUniverseArgument("-Avalue=a\\b", scratch)
             .equals(ScipOptionBuilder.graphUniverseArgument("-Avalue=a/b", scratch)));
