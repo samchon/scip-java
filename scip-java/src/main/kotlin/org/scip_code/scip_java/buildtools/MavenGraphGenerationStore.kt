@@ -446,10 +446,7 @@ internal class MavenGraphGenerationStore(
     }
 
     private fun compilerUniverseText(input: Path): String =
-        compilerInvocations(input)
-            .distinct()
-            .sortedWith(::compareUtf8)
-            .joinToString(separator = "")
+        compilerInvocations(input).distinct().sortedWith(::compareUtf8).joinToString(separator = "")
 
     private fun compilerInvocations(input: Path): List<String> {
         val invocations = mutableListOf<List<String>>()
@@ -564,10 +561,7 @@ internal class MavenGraphGenerationStore(
                 ) {
                     "compiler universe root has an invalid type: $path"
                 }
-                if (
-                    name.endsWith(".args") &&
-                        Files.isDirectory(root.resolve("$target.args.d"))
-                ) {
+                if (name.endsWith(".args") && Files.isDirectory(root.resolve("$target.args.d"))) {
                     Files.deleteIfExists(path)
                 }
             }

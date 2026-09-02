@@ -35,10 +35,7 @@ class MavenGraphGenerationStoreTest {
                 listOf(invocation("arg-a"), invocation("arg-b"), invocation("arg-a"))
                     .joinToString(""),
             )
-            write(
-                legacySecond,
-                listOf(invocation("arg-b"), invocation("arg-a")).joinToString(""),
-            )
+            write(legacySecond, listOf(invocation("arg-b"), invocation("arg-a")).joinToString(""))
             assertEquals(
                 store.compilerUniverseDigest(legacyFirst),
                 store.compilerUniverseDigest(legacySecond),
@@ -52,7 +49,7 @@ class MavenGraphGenerationStoreTest {
 
             store.prepare()
             write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
-            Files.createDirectories(store.staging.resolve(".universe/$targetKey.args"))
+            write(store.staging.resolve(".universe/$targetKey.args/not-an-invocation"), "invalid")
             assertFailsWith<IllegalArgumentException> { store.commit() }
             assertEquals(firstGeneration, Files.readString(store.current))
 
