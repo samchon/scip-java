@@ -86,11 +86,23 @@ final class GraphGenerationStore {
       if (!declared.equals(new LinkedHashSet<>(readLines(generation.resolve(DECLARED_SOURCES))))) {
         return false;
       }
-      if (!universe.equals(readLines(generation.resolve("UNIVERSE")))) return false;
+      if (!List.of(target).equals(readOrderedLines(generation.resolve("TARGET")))) return false;
+      if (!universe.equals(readOrderedLines(generation.resolve("UNIVERSE")))) return false;
+      List<String> actualSources = new ArrayList<>();
       for (Path shard : graphShards(generation)) {
         ShardMetadata metadata = shardMetadata(shard);
-        if (!metadata.source().equals(shardSource(generation.relativize(shard)))) return false;
+        String expectedSource = shardSource(generation.relativize(shard));
+        if (!metadata.source().equals(expectedSource) || !metadata.target().equals(target)) {
+          return false;
+        }
         validateSource(metadata, shard);
+        actualSources.add(expectedSource);
+      }
+      actualSources = new ArrayList<>(new LinkedHashSet<>(actualSources));
+      actualSources.sort(GraphGenerationStore::compareUtf8);
+      List<String> recordedSources = readOrderedLines(generation.resolve("SOURCES"));
+      if (!recordedSources.equals(actualSources) || !recordedSources.containsAll(declared)) {
+        return false;
       }
       return true;
     } catch (IOException | RuntimeException ignored) {
@@ -378,6 +390,12 @@ final class GraphGenerationStore {
     return Files.isRegularFile(input)
         ? new LinkedHashSet<>(Files.readAllLines(input, StandardCharsets.UTF_8))
         : Set.of();
+  }
+
+  private static List<String> readOrderedLines(Path input) throws IOException {
+    return Files.isRegularFile(input)
+        ? Files.readAllLines(input, StandardCharsets.UTF_8)
+        : List.of();
   }
 
   private static String generationDigest(Path root) throws IOException {

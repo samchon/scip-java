@@ -36,6 +36,21 @@ class GraphGenerationStoreTest {
     store.commit(Set.of(source.toFile()), List.of("universe"));
 
     assertTrue(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Path generation = committed(store.outputRoot(), current(store.outputRoot()));
+    Path shard = generation.resolve("src/A.java.graph.json");
+    String validShard = Files.readString(shard);
+    Files.writeString(generation.resolve("TARGET"), ":wrong\n");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(generation.resolve("TARGET"), ":app:compileJava\n");
+    Files.writeString(shard, validShard.replace(":app:compileJava", ":wrong"));
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(shard, validShard);
+    Files.writeString(generation.resolve("SOURCES"), "");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(generation.resolve("SOURCES"), "src/A.java\n");
+    Files.delete(shard);
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(shard, validShard);
     assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("moved")));
     Files.writeString(source, "class Moved {}\n");
     assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
