@@ -81,7 +81,11 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             val invocation = gradleInvocation(gradleWrapper, windowsWrapper)
             var failure: Throwable? = null
             try {
-                runCompileCommand(invocation.temporaryRoot ?: tmp, invocation.command)
+                runCompileCommand(
+                    invocation.temporaryRoot ?: tmp,
+                    invocation.command,
+                    gradleTargetroot(invocation),
+                )
             } catch (error: Throwable) {
                 failure = error
                 throw error
@@ -93,6 +97,17 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                     original.addSuppressed(cleanupError)
                 }
             }
+        }
+    }
+
+    private fun gradleTargetroot(invocation: GradleInvocation): Path {
+        val target = targetroot().toAbsolutePath().normalize()
+        val workspace = index.workingDirectory.toAbsolutePath().normalize()
+        val junction = invocation.junction
+        return if (junction != null && target.startsWith(workspace)) {
+            junction.resolve(workspace.relativize(target))
+        } else {
+            target
         }
     }
 
@@ -178,13 +193,18 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         Files.deleteIfExists(temporaryRoot)
     }
 
-    private fun runCompileCommand(tmp: Path, gradleCommand: List<String>): ProcessResult {
+    private fun runCompileCommand(
+        tmp: Path,
+        gradleCommand: List<String>,
+        targetrootProperty: Path,
+    ): ProcessResult {
         val script = initScript(tmp).toString()
         val cmd = mutableListOf<String>()
         cmd += gradleCommand
         if (index.graphOutput == null) cmd += "--no-daemon"
         cmd += "--init-script"
         cmd += script
+        cmd += "-Dscip.targetroot=$targetrootProperty"
         if (index.graphOutput == null) cmd += "-Pkotlin.compiler.execution.strategy=in-process"
         val defaults =
             if (index.graphOutput == null)
