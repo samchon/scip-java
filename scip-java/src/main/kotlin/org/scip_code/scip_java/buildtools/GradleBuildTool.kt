@@ -1,9 +1,12 @@
 package org.scip_code.scip_java.buildtools
 
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.util.HexFormat
 import org.scip_code.scip_java.Embedded
@@ -123,9 +126,16 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME and
             // internal-tool directory so neither reaches its child JVM through the OEM code page.
             // The process cwd remains the real project.
-            val temporaryRoot = windowsGradleTemporaryRoot(tmp)
-            val junction = temporaryRoot.resolve("workspace")
-            val provisional = GradleInvocation(emptyList(), junction, temporaryRoot)
+            val temporary = windowsGradleTemporaryRoot(tmp)
+            val junction = temporary.root.resolve("workspace")
+            val provisional =
+                GradleInvocation(
+                    emptyList(),
+                    junction,
+                    temporary.root,
+                    temporary.channel,
+                    temporary.lock,
+                )
             try {
                 Files.deleteIfExists(junction)
                 val linked =
@@ -136,7 +146,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                             "/c",
                             "mklink /J \"%SCIP_GRADLE_LINK%\" \"%SCIP_GRADLE_TARGET%\" >nul",
                         ),
-                        temporaryRoot,
+                        temporary.root,
                         env =
                             mapOf(
                                 "SCIP_GRADLE_LINK" to junction.toString(),
@@ -163,15 +173,17 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             GradleInvocation(listOf("gradle"))
         }
 
-    private fun windowsGradleTemporaryRoot(tmp: Path): Path {
+    private fun windowsGradleTemporaryRoot(tmp: Path): WindowsGradleTemporaryRoot {
         val identity =
             HexFormat.of()
                 .formatHex(
                     MessageDigest.getInstance("SHA-256")
                         .digest(
-                            tmp.toAbsolutePath()
-                                .normalize()
-                                .toString()
+                            listOf(
+                                    tmp.toAbsolutePath().normalize(),
+                                    index.workingDirectory.toAbsolutePath().normalize(),
+                                )
+                                .joinToString("\u0000")
                                 .toByteArray(StandardCharsets.UTF_8)
                         )
                 )
@@ -185,12 +197,31 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                 .distinct()
         for (candidate in candidates) {
             if (candidate.toString().any { it.code > 127 }) continue
+            var channel: FileChannel? = null
+            var lock: FileLock? = null
             try {
                 Files.createDirectories(candidate)
                 val temporaryRoot = candidate.resolve("scip-java-gradle-$identity")
+                val opened =
+                    FileChannel.open(
+                        candidate.resolve("scip-java-gradle-$identity.lock"),
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.WRITE,
+                    )
+                channel = opened
+                val acquired = opened.lock()
+                lock = acquired
                 Files.createDirectories(temporaryRoot)
-                return temporaryRoot
+                return WindowsGradleTemporaryRoot(temporaryRoot, opened, acquired)
             } catch (_: Exception) {
+                try {
+                    lock?.release()
+                } catch (_: Exception) {
+                }
+                try {
+                    channel?.close()
+                } catch (_: Exception) {
+                }
                 // Try the next OS-owned temporary root.
             }
         }
@@ -198,21 +229,41 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     }
 
     private fun cleanupGradleInvocation(invocation: GradleInvocation, cleanup: Boolean) {
-        val junction = invocation.junction ?: return
-        // Never recurse here. Every removal is one exact owned path, so a recreated reparse point
-        // can only be unlinked or make the root deletion fail; it cannot lead into user sources.
-        Files.deleteIfExists(junction)
-        val temporaryRoot = invocation.temporaryRoot ?: return
-        if (!cleanup) {
-            index.app.reporter.info(
-                "scip-java: retained Windows Gradle launcher files at $temporaryRoot"
-            )
-            return
+        var failure: Throwable? = null
+        try {
+            val junction = invocation.junction
+            val temporaryRoot = invocation.temporaryRoot
+            if (junction != null && temporaryRoot != null) {
+                // Never recurse here. Every removal is one exact owned path, so a recreated reparse
+                // point can only be unlinked or make root deletion fail; it cannot enter sources.
+                Files.deleteIfExists(junction)
+                if (!cleanup) {
+                    index.app.reporter.info(
+                        "scip-java: retained Windows Gradle launcher files at $temporaryRoot"
+                    )
+                } else {
+                    for (name in WINDOWS_GRADLE_TEMPORARY_FILES) {
+                        Files.deleteIfExists(temporaryRoot.resolve(name))
+                    }
+                    Files.deleteIfExists(temporaryRoot)
+                }
+            }
+        } catch (error: Throwable) {
+            failure = error
+        } finally {
+            for (close in listOf<() -> Unit>(
+                { invocation.lock?.release() },
+                { invocation.channel?.close() },
+            )) {
+                try {
+                    close()
+                } catch (error: Throwable) {
+                    val prior = failure
+                    if (prior == null) failure = error else prior.addSuppressed(error)
+                }
+            }
         }
-        for (name in WINDOWS_GRADLE_TEMPORARY_FILES) {
-            Files.deleteIfExists(temporaryRoot.resolve(name))
-        }
-        Files.deleteIfExists(temporaryRoot)
+        failure?.let { throw it }
     }
 
     private fun runCompileCommand(
@@ -286,6 +337,14 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val command: List<String>,
         val junction: Path? = null,
         val temporaryRoot: Path? = null,
+        val channel: FileChannel? = null,
+        val lock: FileLock? = null,
+    )
+
+    private data class WindowsGradleTemporaryRoot(
+        val root: Path,
+        val channel: FileChannel,
+        val lock: FileLock,
     )
 
     private companion object {
