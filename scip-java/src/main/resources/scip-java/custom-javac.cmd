@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+chcp 65001 >nul
 
 set "NEW_JAVAC_OPTS=%SCIP_JAVAC_OPTIONS_PREFIX%-%RANDOM%-%RANDOM%"
 set "GRAPH_JVM_OPTIONS="

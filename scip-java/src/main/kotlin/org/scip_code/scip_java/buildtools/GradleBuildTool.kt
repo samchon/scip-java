@@ -77,19 +77,41 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     private fun runBuild(): ProcessResult {
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
-        val gradleCommand =
-            if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper))
-                windowsWrapper.toString()
-            else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper))
-                gradleWrapper.toString()
-            else "gradle"
-        return TemporaryFiles.withDirectory(index) { tmp -> runCompileCommand(tmp, gradleCommand) }
+        return TemporaryFiles.withDirectory(index) { tmp ->
+            val invocation = gradleInvocation(tmp, gradleWrapper, windowsWrapper)
+            runCompileCommand(tmp, invocation)
+        }
     }
 
-    private fun runCompileCommand(tmp: Path, gradleCommand: String): ProcessResult {
+    private fun gradleInvocation(
+        tmp: Path,
+        gradleWrapper: Path,
+        windowsWrapper: Path,
+    ): GradleInvocation =
+        if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
+            // A project wrapper launches its JVM through cmd.exe's active code page. Enter through
+            // an ASCII-only forwarder, switch that boundary to UTF-8, and only then expand the
+            // Unicode wrapper path and build arguments.
+            val forwarder = tmp.resolve("gradle-forwarder.cmd")
+            Files.writeString(
+                forwarder,
+                "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\nchcp 65001 >nul\r\ncall \"%SCIP_GRADLE_WRAPPER%\" %*\r\nexit /b %errorlevel%\r\n",
+                StandardCharsets.US_ASCII,
+            )
+            GradleInvocation(
+                listOf(forwarder.toString()),
+                mapOf("SCIP_GRADLE_WRAPPER" to windowsWrapper.toString()),
+            )
+        } else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper)) {
+            GradleInvocation(listOf(gradleWrapper.toString()))
+        } else {
+            GradleInvocation(listOf("gradle"))
+        }
+
+    private fun runCompileCommand(tmp: Path, invocation: GradleInvocation): ProcessResult {
         val script = initScript(tmp).toString()
         val cmd = mutableListOf<String>()
-        cmd += gradleCommand
+        cmd += invocation.command
         if (index.graphOutput == null) cmd += "--no-daemon"
         cmd += "--init-script"
         cmd += script
@@ -109,7 +131,8 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         }
 
         if (index.graphOutput == null) targetroot().toFile().deleteRecursively()
-        val result = index.app.runProcess(cmd, env = mapOf("TERM" to "dumb"))
+        val result =
+            index.app.runProcess(cmd, env = invocation.environment + mapOf("TERM" to "dumb"))
         return Embedded.reportUnexpectedJavacErrors(index.app.reporter, tmp) ?: result
     }
 
@@ -148,4 +171,9 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
 
     private fun groovyString(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+    private data class GradleInvocation(
+        val command: List<String>,
+        val environment: Map<String, String> = emptyMap(),
+    )
 }
