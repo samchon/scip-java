@@ -156,10 +156,8 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
                 assertEquals(0, result.first, result.second)
                 return Files.readAllBytes(artifact)
             }
-            val firstCold =
-                coldArtifact(Files.createDirectories(base.resolve("cold-one")))
-            val secondCold =
-                coldArtifact(Files.createDirectories(base.resolve("cold-two")))
+            val firstCold = coldArtifact(Files.createDirectories(base.resolve("cold-one")))
+            val secondCold = coldArtifact(Files.createDirectories(base.resolve("cold-two")))
             assertTrue(firstCold.contentEquals(secondCold))
         } finally {
             base.toFile().deleteRecursively()
