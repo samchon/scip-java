@@ -13,9 +13,34 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.io.TempDir
 import org.scip_code.scip_java.buildtools.MavenGraphGenerationStore
 
 class MavenGraphGenerationStoreTest {
+    @Test
+    fun compilerUniverseIgnoresDuplicateAndReorderedInvocations(@TempDir root: Path) {
+        val store = MavenGraphGenerationStore(root.resolve("targetroot"), root, "maven:.")
+        val first = root.resolve("first.args")
+        val second = root.resolve("second.args")
+        val changed = root.resolve("changed.args")
+        Files.writeString(
+            first,
+            "@invocation\n@plugin\nplugin\narg-a\n@invocation\n@plugin\nplugin\narg-b\n" +
+                "@invocation\n@plugin\nplugin\narg-a\n",
+        )
+        Files.writeString(
+            second,
+            "@invocation\n@plugin\nplugin\narg-b\n@invocation\n@plugin\nplugin\narg-a\n",
+        )
+        Files.writeString(
+            changed,
+            "@invocation\n@plugin\nplugin\narg-c\n@invocation\n@plugin\nplugin\narg-a\n",
+        )
+
+        assertEquals(store.compilerUniverseDigest(first), store.compilerUniverseDigest(second))
+        assertNotEquals(store.compilerUniverseDigest(first), store.compilerUniverseDigest(changed))
+    }
+
     @Test
     fun publishesOnlySuccessfulCompleteGenerations() {
         withWorkspace { workspace ->

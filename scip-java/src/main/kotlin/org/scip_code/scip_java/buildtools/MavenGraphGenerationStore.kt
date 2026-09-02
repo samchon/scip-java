@@ -432,11 +432,35 @@ internal class MavenGraphGenerationStore(
                     .forEach { options ->
                         rows +=
                             "compilerTarget=${options.fileName}:" +
-                                digest(Files.readAllBytes(options))
+                                compilerUniverseDigest(options)
                     }
             }
         }
         return rows.distinct().sortedWith(::compareUtf8)
+    }
+
+    /** One target universe is the set of compiler invocations, not their scheduling history. */
+    internal fun compilerUniverseDigest(input: Path): String {
+        val invocations = mutableListOf<List<String>>()
+        var current: MutableList<String>? = null
+        for (line in Files.readAllLines(input, StandardCharsets.UTF_8)) {
+            if (line == "@invocation") {
+                current?.let(invocations::add)
+                current = mutableListOf(line)
+            } else {
+                requireNotNull(current) { "compiler universe does not start with @invocation: $input" }
+                    .add(line)
+            }
+        }
+        current?.let(invocations::add)
+        require(invocations.isNotEmpty()) { "compiler universe is empty: $input" }
+        val canonical =
+            invocations
+                .map { invocation -> invocation.joinToString(separator = "\n", postfix = "\n") }
+                .distinct()
+                .sortedWith(::compareUtf8)
+                .joinToString(separator = "")
+        return digest(canonical.toByteArray(StandardCharsets.UTF_8))
     }
 
     private fun reconcileCompilerUniverses(targets: List<String>) {
