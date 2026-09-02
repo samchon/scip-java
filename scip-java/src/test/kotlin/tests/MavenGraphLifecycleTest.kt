@@ -140,6 +140,21 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             val userOutput = runScipJava(workspace, withUserOutput)
             assertEquals(0, userOutput.first, userOutput.second)
             assertEquals(listOf("maven:module-a", "maven:output-poison"), artifactTargets(artifact))
+
+            fun coldArtifact(temporary: Path): ByteArray {
+                targetroot.toFile().deleteRecursively()
+                Files.deleteIfExists(artifact)
+                val cold = arguments.toMutableList()
+                cold[2] = temporary.toString()
+                val result = runScipJava(workspace, cold)
+                assertEquals(0, result.first, result.second)
+                return Files.readAllBytes(artifact)
+            }
+            val firstCold =
+                coldArtifact(Files.createDirectories(base.resolve("cold-one")))
+            val secondCold =
+                coldArtifact(Files.createDirectories(base.resolve("cold-two")))
+            assertTrue(firstCold.contentEquals(secondCold))
         } finally {
             base.toFile().deleteRecursively()
         }

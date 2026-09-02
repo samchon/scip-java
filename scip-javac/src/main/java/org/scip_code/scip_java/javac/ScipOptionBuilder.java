@@ -158,7 +158,14 @@ public class ScipOptionBuilder {
     }
     List<String> invocation = new ArrayList<>();
     invocation.add("@invocation");
-    for (String argument : oldArgs) invocation.add(encodedValue(argument));
+    Path plugin = Paths.get(PLUGINPATH).toAbsolutePath().normalize();
+    invocation.add("@plugin");
+    invocation.add(encodedValue(JavaGraphShard.digest(Files.readAllBytes(plugin))));
+    String scratch = javacPath(plugin.getParent().toString());
+    for (String argument : oldArgs) {
+      invocation.add(
+          encodedValue(javacPath(argument).replace(scratch, "${SCIP_JAVA_TOOL}")));
+    }
     if (firstInvocation) {
       Files.write(
           output,
