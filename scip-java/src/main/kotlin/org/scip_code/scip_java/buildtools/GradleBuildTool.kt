@@ -4,6 +4,8 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
+import java.util.HexFormat
 import org.scip_code.scip_java.Embedded
 import org.scip_code.scip_java.commands.IndexCommand
 
@@ -78,7 +80,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
         return TemporaryFiles.withDirectory(index) { tmp ->
-            val invocation = gradleInvocation(gradleWrapper, windowsWrapper)
+            val invocation = gradleInvocation(tmp, gradleWrapper, windowsWrapper)
             var failure: Throwable? = null
             try {
                 runCompileCommand(
@@ -101,25 +103,31 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     }
 
     private fun gradleTargetroot(invocation: GradleInvocation): Path {
-        val target = targetroot().toAbsolutePath().normalize()
+        val original = targetroot()
+        val junction = invocation.junction ?: return original
+        val target = original.toAbsolutePath().normalize()
         val workspace = index.workingDirectory.toAbsolutePath().normalize()
-        val junction = invocation.junction
-        return if (junction != null && target.startsWith(workspace)) {
+        return if (target.startsWith(workspace)) {
             junction.resolve(workspace.relativize(target))
         } else {
-            target
+            original
         }
     }
 
-    private fun gradleInvocation(gradleWrapper: Path, windowsWrapper: Path): GradleInvocation =
+    private fun gradleInvocation(
+        tmp: Path,
+        gradleWrapper: Path,
+        windowsWrapper: Path,
+    ): GradleInvocation =
         if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
             // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME and
             // internal-tool directory so neither reaches its child JVM through the OEM code page.
             // The process cwd remains the real project.
-            val temporaryRoot = windowsGradleTemporaryRoot()
+            val temporaryRoot = windowsGradleTemporaryRoot(tmp)
             val junction = temporaryRoot.resolve("workspace")
             val provisional = GradleInvocation(emptyList(), junction, temporaryRoot)
             try {
+                Files.deleteIfExists(junction)
                 val linked =
                     ProcessRunner.run(
                         listOf(
@@ -155,7 +163,19 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             GradleInvocation(listOf("gradle"))
         }
 
-    private fun windowsGradleTemporaryRoot(): Path {
+    private fun windowsGradleTemporaryRoot(tmp: Path): Path {
+        val identity =
+            HexFormat.of()
+                .formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                        .digest(
+                            tmp.toAbsolutePath()
+                                .normalize()
+                                .toString()
+                                .toByteArray(StandardCharsets.UTF_8)
+                        )
+                )
+                .take(24)
         val candidates =
             listOfNotNull(
                     System.getenv("SystemRoot")?.let { Paths.get(it, "Temp") },
@@ -167,7 +187,9 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
             if (candidate.toString().any { it.code > 127 }) continue
             try {
                 Files.createDirectories(candidate)
-                return Files.createTempDirectory(candidate, "scip-java-gradle-")
+                val temporaryRoot = candidate.resolve("scip-java-gradle-$identity")
+                Files.createDirectories(temporaryRoot)
+                return temporaryRoot
             } catch (_: Exception) {
                 // Try the next OS-owned temporary root.
             }

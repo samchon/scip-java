@@ -19,6 +19,5 @@ shift
 goto collect_launcher_args
 
 :run_javac
-set "JDK_JAVAC_OPTIONS=%JDK_JAVAC_OPTIONS% @"%NEW_JAVAC_OPTS%""
-javac %SCIP_JAVAC_LAUNCHER_JVM_OPTIONS_CMD% %LAUNCHER_ARGS%
+javac %SCIP_JAVAC_LAUNCHER_JVM_OPTIONS_CMD% @"%NEW_JAVAC_OPTS%" %LAUNCHER_ARGS%
 exit /b %errorlevel%
