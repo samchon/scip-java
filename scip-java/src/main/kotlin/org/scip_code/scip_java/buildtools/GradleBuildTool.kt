@@ -96,10 +96,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
         }
     }
 
-    private fun gradleInvocation(
-        gradleWrapper: Path,
-        windowsWrapper: Path,
-    ): GradleInvocation =
+    private fun gradleInvocation(gradleWrapper: Path, windowsWrapper: Path): GradleInvocation =
         if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
             // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME and
             // internal-tool directory so neither reaches its child JVM through the OEM code page.
@@ -128,9 +125,7 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
                         "Unable to create a Unicode-safe Gradle wrapper path"
                     )
                 }
-                provisional.copy(
-                    command = listOf(junction.resolve("gradlew.bat").toString())
-                )
+                provisional.copy(command = listOf(junction.resolve("gradlew.bat").toString()))
             } catch (error: Throwable) {
                 try {
                     cleanupGradleInvocation(provisional, index.cleanup)
