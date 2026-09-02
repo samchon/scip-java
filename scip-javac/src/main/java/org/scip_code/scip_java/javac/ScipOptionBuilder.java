@@ -169,17 +169,17 @@ public class ScipOptionBuilder {
   }
 
   static String graphInvocationSlot(List<String> arguments, Path scratch) {
+    String output = null;
     for (int index = 0; index < arguments.size(); index++) {
       String argument = unwrapQuote(arguments.get(index));
       if ("-d".equals(argument) && index + 1 < arguments.size()) {
-        return JavaGraphShard.digest(
-            graphUniverseArgument(unwrapQuote(arguments.get(index + 1)), scratch));
-      }
-      if (argument.startsWith("-d=") && argument.length() > 3) {
-        return JavaGraphShard.digest(graphUniverseArgument(argument.substring(3), scratch));
+        output = unwrapQuote(arguments.get(index + 1));
+      } else if (argument.startsWith("-d=") && argument.length() > 3) {
+        output = argument.substring(3);
       }
     }
-    return JavaGraphShard.digest("default-output");
+    if (output == null) return JavaGraphShard.digest("default-output");
+    return JavaGraphShard.digest(graphUniverseArgument(output, scratch));
   }
 
   static void writeGraphInvocation(

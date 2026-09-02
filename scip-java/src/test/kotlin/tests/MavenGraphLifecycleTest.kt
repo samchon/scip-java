@@ -34,7 +34,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
                     "--graph-output",
                     artifact.toString(),
                     "--",
-                    "compile",
+                    "test-compile",
                 )
 
             val first = runScipJava(workspace, arguments)
@@ -51,6 +51,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             assertEquals(
                 listOf(
                     "module-a/src/main/java/example/A.java",
+                    "module-a/src/test/java/example/ATest.java",
                     "module-b/src/main/java/example/B.java",
                 ),
                 artifactSources(artifact),
@@ -58,6 +59,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             val firstArtifact = Files.readAllBytes(artifact)
             val firstPointer = currentPointer(targetroot)
             assertEquals(2, compilerUniverseCount(targetroot, firstPointer))
+            assertEquals(3, compilerInvocationCount(targetroot, firstPointer))
 
             val second = runScipJava(workspace, arguments)
             assertEquals(0, second.first, second.second)
@@ -89,6 +91,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             val changedPointer = currentPointer(targetroot)
             assertNotEquals(configuredPointer, changedPointer)
             assertEquals(2, compilerUniverseCount(targetroot, changedPointer))
+            assertEquals(3, compilerInvocationCount(targetroot, changedPointer))
 
             Files.writeString(sourceA, "package example; public class A {\n")
             val failed = runScipJava(workspace, arguments)
@@ -101,7 +104,13 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             Files.delete(sourceB)
             val deleted = runScipJava(workspace, arguments)
             assertEquals(0, deleted.first, deleted.second)
-            assertEquals(listOf("module-a/src/main/java/example/A.java"), artifactSources(artifact))
+            assertEquals(
+                listOf(
+                    "module-a/src/main/java/example/A.java",
+                    "module-a/src/test/java/example/ATest.java",
+                ),
+                artifactSources(artifact),
+            )
 
             val created = workspace.resolve("module-b/src/main/java/example/C.java")
             write(created, "package example; public class C {}\n")
@@ -109,6 +118,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             assertEquals(
                 listOf(
                     "module-a/src/main/java/example/A.java",
+                    "module-a/src/test/java/example/ATest.java",
                     "module-b/src/main/java/example/C.java",
                 ),
                 artifactSources(artifact),
@@ -121,6 +131,7 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             assertEquals(
                 listOf(
                     "module-a/src/main/java/example/A.java",
+                    "module-a/src/test/java/example/ATest.java",
                     "module-b/src/main/java/example/D.java",
                 ),
                 artifactSources(artifact),
@@ -133,7 +144,13 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             )
             assertEquals(0, runScipJava(workspace, arguments).first)
             assertEquals(listOf("maven:module-a"), artifactTargets(artifact))
-            assertEquals(listOf("module-a/src/main/java/example/A.java"), artifactSources(artifact))
+            assertEquals(
+                listOf(
+                    "module-a/src/main/java/example/A.java",
+                    "module-a/src/test/java/example/ATest.java",
+                ),
+                artifactSources(artifact),
+            )
             assertTrue(Files.isRegularFile(renamed))
 
             val withUserOutput = arguments.dropLast(1) + listOf("compile", "-Doutput=user-value")
@@ -208,6 +225,10 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             "package example; public class A {}\n",
         )
         write(
+            root.resolve("module-a/src/test/java/example/ATest.java"),
+            "package example; public class ATest {}\n",
+        )
+        write(
             root.resolve("module-b/src/main/java/example/B.java"),
             "package example; public class B {}\n",
         )
@@ -268,6 +289,24 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
                     .distinct()
                     .toList()
             universes.size
+        }
+    }
+
+    private fun compilerInvocationCount(targetroot: Path, generation: String): Int {
+        val targets = targetroot.resolve("META-INF/scip-graph-store/targets")
+        return Files.walk(targets).use { paths ->
+            paths
+                .filter(Files::isRegularFile)
+                .filter { it.fileName.toString().endsWith(".args") }
+                .filter { path ->
+                    val universe =
+                        if (path.parent.fileName.toString().endsWith(".args.d")) path.parent.parent
+                        else path.parent
+                    universe.fileName.toString() == ".universe" &&
+                        universe.parent.fileName.toString() == generation
+                }
+                .count()
+                .toInt()
         }
     }
 

@@ -362,7 +362,7 @@ class JavaGraphShardTest {
 
   @Test
   void graphTargetEncodingPreservesSpacesAndUnicode(@TempDir Path root) {
-    String target = ":module with spaces ??:compileJava";
+    String target = ":module with spaces 한글:compileJava";
     String encoded =
         Base64.getUrlEncoder()
             .withoutPadding()
@@ -421,9 +421,9 @@ class JavaGraphShardTest {
         ScipOptionBuilder.graphUniverseArgument(actualPath + ",next=" + actualPath, scratch);
     assertEquals(2, count(repeated, "|tool"));
     assertEquals(
-        ScipOptionBuilder.graphUniverseArgument("-A?=" + actualPath, scratch),
+        ScipOptionBuilder.graphUniverseArgument("-Aİ=" + actualPath, scratch),
         ScipOptionBuilder.graphUniverseArgument(
-            "-A?=" + movedPath, root.resolve("Another Tool Root")));
+            "-Aİ=" + movedPath, root.resolve("Another Tool Root")));
     if (java.io.File.separatorChar == '\\') {
       String portable = actualPath.replace('\\', '/');
       int separator = portable.indexOf('/', 3);
@@ -460,8 +460,11 @@ class JavaGraphShardTest {
     String firstSlot = JavaGraphShard.digest("main-output");
     String secondSlot = JavaGraphShard.digest("test-output");
     String classes = root.resolve("classes").toString();
+    String testClasses = root.resolve("test-classes").toString();
     String classesSlot =
         JavaGraphShard.digest(ScipOptionBuilder.graphUniverseArgument(classes, root));
+    String testClassesSlot =
+        JavaGraphShard.digest(ScipOptionBuilder.graphUniverseArgument(testClasses, root));
     assertEquals(
         classesSlot,
         ScipOptionBuilder.graphInvocationSlot(
@@ -474,6 +477,10 @@ class JavaGraphShardTest {
     assertEquals(
         classesSlot,
         ScipOptionBuilder.graphInvocationSlot(List.of("\"-d=" + classes + "\""), root));
+    assertEquals(
+        testClassesSlot,
+        ScipOptionBuilder.graphInvocationSlot(
+            List.of("\"-d\"", "\"" + classes + "\"", "-d=" + testClasses), root));
     assertEquals(
         JavaGraphShard.digest("default-output"),
         ScipOptionBuilder.graphInvocationSlot(List.of("-classpath", "dependency.jar"), root));
