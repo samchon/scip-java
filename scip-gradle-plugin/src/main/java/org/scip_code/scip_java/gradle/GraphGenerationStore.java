@@ -79,13 +79,17 @@ final class GraphGenerationStore {
     try {
       Path generation = currentGeneration();
       if (generation == null) return false;
-      Set<String> declared = new LinkedHashSet<>();
+      if (!generation.getFileName().toString().equals(generationDigest(generation))) return false;
+      for (String required : List.of("TARGET", "UNIVERSE", "SOURCES", DECLARED_SOURCES)) {
+        if (!Files.isRegularFile(generation.resolve(required))) return false;
+      }
+      List<String> declared = new ArrayList<>();
       for (java.io.File source : taskSources) {
         declared.add(relativeSource(source.toPath().toAbsolutePath().normalize()));
       }
-      if (!declared.equals(new LinkedHashSet<>(readLines(generation.resolve(DECLARED_SOURCES))))) {
-        return false;
-      }
+      declared = new ArrayList<>(new LinkedHashSet<>(declared));
+      declared.sort(GraphGenerationStore::compareUtf8);
+      if (!declared.equals(readOrderedLines(generation.resolve(DECLARED_SOURCES)))) return false;
       if (!List.of(target).equals(readOrderedLines(generation.resolve("TARGET")))) return false;
       if (!universe.equals(readOrderedLines(generation.resolve("UNIVERSE")))) return false;
       List<String> actualSources = new ArrayList<>();

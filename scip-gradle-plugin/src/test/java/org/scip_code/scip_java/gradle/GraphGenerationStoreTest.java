@@ -39,6 +39,12 @@ class GraphGenerationStoreTest {
     Path generation = committed(store.outputRoot(), current(store.outputRoot()));
     Path shard = generation.resolve("src/A.java.graph.json");
     String validShard = Files.readString(shard);
+    Files.writeString(shard, validShard + " ");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(shard, validShard);
+    Files.delete(generation.resolve("DECLARED_SOURCES"));
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(generation.resolve("DECLARED_SOURCES"), "src/A.java\n");
     Files.writeString(generation.resolve("TARGET"), ":wrong\n");
     assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
     Files.writeString(generation.resolve("TARGET"), ":app:compileJava\n");
