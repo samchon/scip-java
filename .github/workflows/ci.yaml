@@ -74,7 +74,7 @@ jobs:
           --tests tests.MavenGraphLifecycleTest
           --tests tests.GraphAggregateRunnerTest
           --tests tests.GradleBuildToolTest
-          --no-daemon --no-configuration-cache
+          --no-daemon --no-configuration-cache --info
           "-Pkotlin.compiler.execution.strategy=in-process"
           "-Pkotlin.incremental=false"
 

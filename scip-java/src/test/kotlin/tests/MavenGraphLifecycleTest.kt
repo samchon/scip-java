@@ -141,7 +141,12 @@ class MavenGraphLifecycleTest : BuildToolHarness() {
             assertEquals(0, userOutput.first, userOutput.second)
             assertEquals(listOf("maven:module-a", "maven:output-poison"), artifactTargets(artifact))
 
+            val buildOutputs =
+                listOf("target", "module-a/target", "module-b/target", "output-poison/target")
             fun coldArtifact(temporary: Path): ByteArray {
+                for (output in buildOutputs) {
+                    assertTrue(workspace.resolve(output).toFile().deleteRecursively())
+                }
                 assertTrue(targetroot.toFile().deleteRecursively())
                 assertTrue(Files.notExists(targetroot))
                 Files.deleteIfExists(artifact)
