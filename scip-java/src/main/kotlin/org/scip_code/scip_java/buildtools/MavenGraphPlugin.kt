@@ -125,8 +125,7 @@ internal object MavenGraphPlugin {
                     ) {
                         localRepository = listOf(argument, arguments[++index])
                     } else if (
-                        index + 2 < arguments.size &&
-                            arguments[index + 1] == "maven.repo.local"
+                        index + 2 < arguments.size && arguments[index + 1] == "maven.repo.local"
                     ) {
                         localRepository = listOf(argument, arguments[++index], arguments[++index])
                     }
@@ -177,13 +176,14 @@ internal object MavenGraphPlugin {
 
     private fun normalizeConfigArgument(value: String): String {
         val unquoted = value.removeSurrounding("\"")
-        for (prefix in listOf(
-            "-Dmaven.repo.local=",
-            "--define=maven.repo.local=",
-            "maven.repo.local=",
-            "--settings=",
-            "--global-settings=",
-        )) {
+        for (prefix in
+            listOf(
+                "-Dmaven.repo.local=",
+                "--define=maven.repo.local=",
+                "maven.repo.local=",
+                "--settings=",
+                "--global-settings=",
+            )) {
             if (unquoted.startsWith(prefix)) {
                 return prefix + unquoted.removePrefix(prefix).removeSurrounding("\"")
             }

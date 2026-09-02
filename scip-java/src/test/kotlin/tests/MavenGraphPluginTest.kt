@@ -21,18 +21,14 @@ class MavenGraphPluginTest {
             -D
             "maven.repo.local=repository with spaces"
             --offline
-            """.trimIndent(),
+            """
+                .trimIndent(),
         )
 
         val effective =
             MavenGraphPlugin.effectiveRepositorySelectionArguments(
                 root,
-                listOf(
-                    "--settings=cli settings.xml",
-                    "-D",
-                    "maven.repo.local",
-                    "cli-override",
-                ),
+                listOf("--settings=cli settings.xml", "-D", "maven.repo.local", "cli-override"),
             )
         assertEquals(
             listOf(
