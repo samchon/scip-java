@@ -17,6 +17,63 @@ import org.scip_code.scip_java.buildtools.MavenGraphGenerationStore
 
 class MavenGraphGenerationStoreTest {
     @Test
+    fun compilerUniverseIgnoresDuplicateAndReorderedInvocationHistory() {
+        withWorkspace { workspace ->
+            val source = workspace.resolve("src/A.java")
+            write(source, "class A {}\n")
+            val store =
+                MavenGraphGenerationStore(workspace.resolve("targetroot"), workspace, "maven")
+            val targetKey = rawDigest("maven:.")
+            val first = mapOf("main" to invocation("arg-a"), "test" to invocation("arg-b"))
+            val second = mapOf("main" to invocation("arg-a"))
+            val changed = mapOf("main" to invocation("arg-c"))
+
+            val legacyFirst = workspace.resolve("legacy-first.args")
+            val legacySecond = workspace.resolve("legacy-second.args")
+            write(
+                legacyFirst,
+                listOf(invocation("arg-a"), invocation("arg-b"), invocation("arg-a"))
+                    .joinToString(""),
+            )
+            write(legacySecond, listOf(invocation("arg-b"), invocation("arg-a")).joinToString(""))
+            assertEquals(
+                store.compilerUniverseDigest(legacyFirst),
+                store.compilerUniverseDigest(legacySecond),
+            )
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            writeInvocationDirectory(store.staging, targetKey, first)
+            store.commit()
+            val firstGeneration = Files.readString(store.current)
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            write(store.staging.resolve(".universe/$targetKey.args/not-an-invocation"), "invalid")
+            assertFailsWith<IllegalArgumentException> { store.commit() }
+            assertEquals(firstGeneration, Files.readString(store.current))
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            writeInvocationDirectory(store.staging, targetKey, second)
+            store.commit()
+            assertEquals(firstGeneration, Files.readString(store.current))
+
+            store.prepare()
+            write(store.staging.resolve("src/A.java.graph.json"), shard("maven:.", "src/A.java"))
+            writeInvocationDirectory(store.staging, targetKey, changed)
+            store.commit()
+            assertNotEquals(firstGeneration, Files.readString(store.current))
+
+            val malformed = workspace.resolve("malformed.args")
+            write(malformed, "@invocation\n")
+            assertFailsWith<IllegalArgumentException> { store.compilerUniverseDigest(malformed) }
+            write(malformed, "@invocation\n@plugin\n${encodedValue("not-a-digest")}\n")
+            assertFailsWith<IllegalArgumentException> { store.compilerUniverseDigest(malformed) }
+        }
+    }
+
+    @Test
     fun publishesOnlySuccessfulCompleteGenerations() {
         withWorkspace { workspace ->
             val source = workspace.resolve("src/A.java")
@@ -146,6 +203,34 @@ class MavenGraphGenerationStoreTest {
         Files.createDirectories(path.parent)
         Files.writeString(path, text, StandardCharsets.UTF_8)
     }
+
+    private fun writeInvocationDirectory(
+        staging: Path,
+        targetKey: String,
+        invocations: Map<String, String>,
+    ) {
+        for ((slot, invocation) in invocations) {
+            write(
+                staging.resolve(".universe/$targetKey.args.d/${rawDigest(slot)}.args"),
+                invocation,
+            )
+        }
+    }
+
+    private fun invocation(argument: String): String =
+        "@invocation\n@plugin\n${encodedValue("a".repeat(64))}\n${encodedValue(argument)}\n"
+
+    private fun encodedValue(value: String): String =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(value.toByteArray(StandardCharsets.UTF_8))
+
+    private fun rawDigest(value: String): String =
+        HexFormat.of()
+            .formatHex(
+                MessageDigest.getInstance("SHA-256")
+                    .digest(value.toByteArray(StandardCharsets.UTF_8))
+            )
 
     private fun shard(target: String, source: String): String =
         """{"schemaVersion":1,"target":"$target","source":"$source","checkerDigest":"${digest(source)}","diskDigest":"${digest(source)}","nodes":[],"edges":[],"unresolved":[]}"""

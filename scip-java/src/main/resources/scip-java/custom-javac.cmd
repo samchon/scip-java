@@ -2,19 +2,9 @@
 setlocal EnableExtensions DisableDelayedExpansion
 
 set "NEW_JAVAC_OPTS=%SCIP_JAVAC_OPTIONS_PREFIX%-%RANDOM%-%RANDOM%"
-set "GRAPH_JVM_OPTIONS="
-if /I "%SCIP_GRAPH_ENABLED%"=="true" (
-  set GRAPH_JVM_OPTIONS="-Dscip.graph.enabled=true" "-Dscip.graph.root=%SCIP_GRAPH_ROOT%" "-Dscip.graph.target=%SCIP_GRAPH_TARGET%"
-)
+set "SCIP_OUTPUT=%NEW_JAVAC_OPTS%"
 
 java ^
-  "-Dscip.errorpath=%SCIP_ERRORPATH%" ^
-  "-Dscip.pluginpath=%SCIP_PLUGINPATH%" ^
-  "-Dscip.sourceroot=%SCIP_SOURCEROOT%" ^
-  "-Dscip.targetroot=%SCIP_TARGETROOT%" ^
-  %GRAPH_JVM_OPTIONS% ^
-  "-Dscip.output=%NEW_JAVAC_OPTS%" ^
-  "-Dscip.old-output=%SCIP_OLD_JAVAC_OPTS%" ^
   -classpath "%SCIP_PLUGINPATH%" ^
   org.scip_code.scip_java.javac.InjectScipOptions ^
   %*

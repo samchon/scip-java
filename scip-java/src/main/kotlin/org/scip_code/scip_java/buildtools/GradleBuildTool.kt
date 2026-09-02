@@ -1,9 +1,16 @@
 package org.scip_code.scip_java.buildtools
 
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
+import java.util.HexFormat
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 import org.scip_code.scip_java.Embedded
 import org.scip_code.scip_java.commands.IndexCommand
 
@@ -77,23 +84,211 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     private fun runBuild(): ProcessResult {
         val gradleWrapper = index.workingDirectory.resolve("gradlew")
         val windowsWrapper = index.workingDirectory.resolve("gradlew.bat")
-        val gradleCommand =
-            if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper))
-                windowsWrapper.toString()
-            else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper))
-                gradleWrapper.toString()
-            else "gradle"
-        return TemporaryFiles.withDirectory(index) { tmp -> runCompileCommand(tmp, gradleCommand) }
+        return TemporaryFiles.withDirectory(index) { tmp ->
+            val invocation = gradleInvocation(tmp, gradleWrapper, windowsWrapper)
+            var failure: Throwable? = null
+            try {
+                runCompileCommand(
+                    invocation.temporaryRoot ?: tmp,
+                    invocation.command,
+                    gradleTargetroot(invocation),
+                )
+            } catch (error: Throwable) {
+                failure = error
+                throw error
+            } finally {
+                try {
+                    cleanupGradleInvocation(invocation, index.cleanup)
+                } catch (cleanupError: Throwable) {
+                    val original = failure ?: throw cleanupError
+                    original.addSuppressed(cleanupError)
+                }
+            }
+        }
     }
 
-    private fun runCompileCommand(tmp: Path, gradleCommand: String): ProcessResult {
+    private fun gradleTargetroot(invocation: GradleInvocation): Path {
+        val original = targetroot()
+        val junction = invocation.junction ?: return original
+        val target = original.toAbsolutePath().normalize()
+        val workspace = index.workingDirectory.toAbsolutePath().normalize()
+        return if (target.startsWith(workspace)) {
+            junction.resolve(workspace.relativize(target))
+        } else {
+            original
+        }
+    }
+
+    private fun gradleInvocation(
+        tmp: Path,
+        gradleWrapper: Path,
+        windowsWrapper: Path,
+    ): GradleInvocation =
+        if (java.io.File.separatorChar == '\\' && Files.isRegularFile(windowsWrapper)) {
+            // Keep the project's wrapper byte-for-byte, but give it an ASCII-only APP_HOME and
+            // internal-tool directory so neither reaches its child JVM through the OEM code page.
+            // The process cwd remains the real project.
+            val temporary = windowsGradleTemporaryRoot(tmp)
+            val junction = temporary.root.resolve("workspace")
+            val provisional =
+                GradleInvocation(
+                    emptyList(),
+                    junction,
+                    temporary.root,
+                    temporary.channel,
+                    temporary.lock,
+                    temporary.processLock,
+                )
+            try {
+                Files.deleteIfExists(junction)
+                val linked =
+                    ProcessRunner.run(
+                        listOf(
+                            "cmd.exe",
+                            "/d",
+                            "/c",
+                            "mklink /J \"%SCIP_GRADLE_LINK%\" \"%SCIP_GRADLE_TARGET%\" >nul",
+                        ),
+                        temporary.root,
+                        env =
+                            mapOf(
+                                "SCIP_GRADLE_LINK" to junction.toString(),
+                                "SCIP_GRADLE_TARGET" to index.workingDirectory.toString(),
+                            ),
+                    )
+                if (linked.exitCode != 0) {
+                    throw IllegalStateException(
+                        "Unable to create a Unicode-safe Gradle wrapper path"
+                    )
+                }
+                provisional.copy(command = listOf(junction.resolve("gradlew.bat").toString()))
+            } catch (error: Throwable) {
+                try {
+                    cleanupGradleInvocation(provisional, index.cleanup)
+                } catch (cleanupError: Throwable) {
+                    error.addSuppressed(cleanupError)
+                }
+                throw error
+            }
+        } else if (Files.isRegularFile(gradleWrapper) && Files.isExecutable(gradleWrapper)) {
+            GradleInvocation(listOf(gradleWrapper.toString()))
+        } else {
+            GradleInvocation(listOf("gradle"))
+        }
+
+    private fun windowsGradleTemporaryRoot(tmp: Path): WindowsGradleTemporaryRoot {
+        val identity =
+            HexFormat.of()
+                .formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                        .digest(
+                            listOf(
+                                    tmp.toAbsolutePath().normalize(),
+                                    index.workingDirectory.toAbsolutePath().normalize(),
+                                )
+                                .joinToString("\u0000")
+                                .toByteArray(StandardCharsets.UTF_8)
+                        )
+                )
+                .take(24)
+        val candidates =
+            listOfNotNull(
+                    System.getenv("SystemRoot")?.let { Paths.get(it, "Temp") },
+                    System.getenv("ProgramData")?.let { Paths.get(it, "Temp") },
+                    System.getProperty("java.io.tmpdir")?.let(Paths::get),
+                )
+                .distinct()
+        val processLock = WINDOWS_GRADLE_LOCKS.computeIfAbsent(identity) { ReentrantLock() }
+        processLock.lock()
+        var acquiredRoot = false
+        try {
+            for (candidate in candidates) {
+                if (candidate.toString().any { it.code > 127 }) continue
+                var channel: FileChannel? = null
+                var lock: FileLock? = null
+                try {
+                    Files.createDirectories(candidate)
+                    val temporaryRoot = candidate.resolve("scip-java-gradle-$identity")
+                    val opened =
+                        FileChannel.open(
+                            candidate.resolve("scip-java-gradle-$identity.lock"),
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.WRITE,
+                        )
+                    channel = opened
+                    val acquired = opened.lock()
+                    lock = acquired
+                    Files.createDirectories(temporaryRoot)
+                    acquiredRoot = true
+                    return WindowsGradleTemporaryRoot(temporaryRoot, opened, acquired, processLock)
+                } catch (_: Exception) {
+                    try {
+                        lock?.release()
+                    } catch (_: Exception) {}
+                    try {
+                        channel?.close()
+                    } catch (_: Exception) {}
+                    // Try the next OS-owned temporary root.
+                }
+            }
+            throw IllegalStateException("Unable to create an ASCII-safe Gradle launcher directory")
+        } finally {
+            if (!acquiredRoot) processLock.unlock()
+        }
+    }
+
+    private fun cleanupGradleInvocation(invocation: GradleInvocation, cleanup: Boolean) {
+        var failure: Throwable? = null
+        try {
+            val junction = invocation.junction
+            val temporaryRoot = invocation.temporaryRoot
+            if (junction != null && temporaryRoot != null) {
+                // Never recurse here. Every removal is one exact owned path, so a recreated reparse
+                // point can only be unlinked or make root deletion fail; it cannot enter sources.
+                Files.deleteIfExists(junction)
+                if (!cleanup) {
+                    index.app.reporter.info(
+                        "scip-java: retained Windows Gradle launcher files at $temporaryRoot"
+                    )
+                } else {
+                    for (name in WINDOWS_GRADLE_TEMPORARY_FILES) {
+                        Files.deleteIfExists(temporaryRoot.resolve(name))
+                    }
+                    Files.deleteIfExists(temporaryRoot)
+                }
+            }
+        } catch (error: Throwable) {
+            failure = error
+        } finally {
+            for (close in
+                listOf<() -> Unit>(
+                    { invocation.lock?.release() },
+                    { invocation.channel?.close() },
+                    { invocation.processLock?.unlock() },
+                )) {
+                try {
+                    close()
+                } catch (error: Throwable) {
+                    val prior = failure
+                    if (prior == null) failure = error else prior.addSuppressed(error)
+                }
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    private fun runCompileCommand(
+        tmp: Path,
+        gradleCommand: List<String>,
+        targetrootProperty: Path,
+    ): ProcessResult {
         val script = initScript(tmp).toString()
         val cmd = mutableListOf<String>()
         cmd += gradleCommand
         if (index.graphOutput == null) cmd += "--no-daemon"
         cmd += "--init-script"
         cmd += script
-        cmd += "-Dscip.targetroot=${targetroot()}"
+        cmd += "-Dscip.targetroot=$targetrootProperty"
         if (index.graphOutput == null) cmd += "-Pkotlin.compiler.execution.strategy=in-process"
         val defaults =
             if (index.graphOutput == null)
@@ -148,4 +343,32 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
 
     private fun groovyString(value: String): String =
         "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+    private data class GradleInvocation(
+        val command: List<String>,
+        val junction: Path? = null,
+        val temporaryRoot: Path? = null,
+        val channel: FileChannel? = null,
+        val lock: FileLock? = null,
+        val processLock: ReentrantLock? = null,
+    )
+
+    private data class WindowsGradleTemporaryRoot(
+        val root: Path,
+        val channel: FileChannel,
+        val lock: FileLock,
+        val processLock: ReentrantLock,
+    )
+
+    private companion object {
+        private val WINDOWS_GRADLE_TEMPORARY_FILES =
+            listOf(
+                "errorpath.txt",
+                "gradle-plugin.jar",
+                "init-script.gradle",
+                "scip-kotlinc.jar",
+                "scip-plugin.jar",
+            )
+        private val WINDOWS_GRADLE_LOCKS = ConcurrentHashMap<String, ReentrantLock>()
+    }
 }

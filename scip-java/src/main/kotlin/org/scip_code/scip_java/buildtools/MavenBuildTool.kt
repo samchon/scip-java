@@ -66,6 +66,7 @@ class MavenBuildTool(index: IndexCommand) : BuildTool("Maven", index) {
             }
             val command = mutableListOf<String>()
             command += mavenScript
+            command += MavenGraphPlugin.projectRepositorySelectionArguments(index.workingDirectory)
             if (graphRoot == null) command += "-Dmaven.compiler.useIncrementalCompilation=false"
             // NOTE(olafur): the square/javapoet repo sets compilerId to
             // 'javac-with-javac', which appears to override the

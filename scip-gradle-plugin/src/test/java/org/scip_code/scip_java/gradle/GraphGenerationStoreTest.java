@@ -10,11 +10,60 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class GraphGenerationStoreTest {
+  @Test
+  void currentValidityForcesCompilationWhenTheGraphIsMissingOrStale(@TempDir Path root)
+      throws IOException {
+    Path project = root.resolve("project");
+    Path source = project.resolve("src/A.java");
+    Files.createDirectories(source.getParent());
+    Files.writeString(source, "");
+    GraphGenerationStore store =
+        new GraphGenerationStore(root.resolve("target"), project, ":app:compileJava");
+    store.prepare();
+    replace(
+        store.staging().resolve("src/A.java.graph.json"),
+        shard("src/A.java")
+            .replace(
+                "\"diskDigest\":\"\"",
+                "\"diskDigest\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\""));
+    marker(store.staging(), "src/A.java");
+    store.commit(Set.of(source.toFile()), List.of("universe"));
+
+    assertTrue(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Path generation = committed(store.outputRoot(), current(store.outputRoot()));
+    Path shard = generation.resolve("src/A.java.graph.json");
+    String validShard = Files.readString(shard);
+    Files.writeString(shard, validShard + " ");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(shard, validShard);
+    Files.delete(generation.resolve("DECLARED_SOURCES"));
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(generation.resolve("DECLARED_SOURCES"), "src/A.java\n");
+    Files.writeString(generation.resolve("TARGET"), ":wrong\n");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(generation.resolve("TARGET"), ":app:compileJava\n");
+    Files.writeString(shard, validShard.replace(":app:compileJava", ":wrong"));
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(shard, validShard);
+    Files.writeString(generation.resolve("SOURCES"), "");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(generation.resolve("SOURCES"), "src/A.java\n");
+    Files.delete(shard);
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.writeString(shard, validShard);
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("moved")));
+    Files.writeString(source, "class Moved {}\n");
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+    Files.delete(store.outputRoot().resolve("CURRENT"));
+    assertFalse(store.matchesCurrent(Set.of(source.toFile()), List.of("universe")));
+  }
+
   @Test
   void commitsSuccessfulTasksAndLeavesFailedStagingInvisible(@TempDir Path root)
       throws IOException {
@@ -26,6 +75,9 @@ class GraphGenerationStoreTest {
 
     store.prepare();
     replace(store.staging().resolve("src/A.java.graph.json"), shard("src/A.java"));
+    replace(
+        store.staging().resolve(".universe/transient.args.d/invocation.args"),
+        "compiler scheduling state");
     marker(store.staging(), "src/A.java");
     store.commit(Set.of(firstSource.toFile()));
     String firstGeneration = current(store.outputRoot());
@@ -34,6 +86,7 @@ class GraphGenerationStoreTest {
             .resolve("src/A.java.graph.json")
             .toFile()
             .isFile());
+    assertFalse(Files.exists(committed(store.outputRoot(), firstGeneration).resolve(".universe")));
 
     store.prepare();
     replace(store.staging().resolve("src/A.java.graph.json"), "broken candidate\n");

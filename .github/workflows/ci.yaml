@@ -1,5 +1,6 @@
 name: CI
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -40,6 +41,51 @@ jobs:
       - name: scip-kotlinc tests
         run: gradle :scip-kotlinc:test --no-daemon
 
+  java_graph:
+    name: Java graph (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: 9.4.1
+
+      - name: Compiler graph semantics and identity
+        run: >-
+          gradle :scip-javac:test
+          --tests org.scip_code.scip_java.javac.JavaGraphShardTest
+          --no-daemon --no-configuration-cache
+
+      - name: Gradle graph store validity
+        run: >-
+          gradle :scip-gradle-plugin:test
+          --tests org.scip_code.scip_java.gradle.GraphGenerationStoreTest
+          --no-daemon --no-configuration-cache
+
+      - name: Gradle and Maven graph lifecycles
+        run: >-
+          gradle :scip-java:test
+          --tests tests.GradleGraphLifecycleTest
+          --tests tests.MavenGraphGenerationStoreTest
+          --tests tests.MavenGraphLifecycleTest
+          --tests tests.MavenGraphPluginTest
+          --tests tests.GraphAggregateRunnerTest
+          --tests tests.GradleBuildToolTest
+          --no-daemon --no-configuration-cache --info
+          "-Pkotlin.compiler.execution.strategy=in-process"
+          "-Pkotlin.incremental=false"
+
   docker_test:
     runs-on: ubuntu-latest
     name: Docker CLI tests
@@ -69,7 +115,7 @@ jobs:
 
   ci-pass:
     if: always()
-    needs: [format, kotlin_plugin, docker_test]
+    needs: [format, kotlin_plugin, java_graph, docker_test]
     runs-on: ubuntu-latest
     name: CI pass
     steps:

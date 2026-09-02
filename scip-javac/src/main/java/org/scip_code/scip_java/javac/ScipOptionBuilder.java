@@ -2,34 +2,44 @@ package org.scip_code.scip_java.javac;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ScipOptionBuilder {
+  private static final ConcurrentHashMap<Path, Object> GRAPH_INVOCATION_LOCKS =
+      new ConcurrentHashMap<>();
   private String previousArg = "";
   private final ArrayList<String> oldArgs = new ArrayList<>();
   private final ArrayList<String> result = new ArrayList<>();
   private boolean isClasspathUpdated = false;
 
-  public static final String ERRORPATH = System.getProperty("scip.errorpath", "");
-  private static final String PLUGINPATH = System.getProperty("scip.pluginpath", "");
-  private static final String SOURCEROOT = System.getProperty("scip.sourceroot", "");
-  private static final String TARGETROOT = System.getProperty("scip.targetroot", "");
-  private static final String GRAPH_ROOT = System.getProperty("scip.graph.root", "");
-  private static final String GRAPH_TARGET = System.getProperty("scip.graph.target", "");
+  public static final String ERRORPATH = setting("scip.errorpath", "SCIP_ERRORPATH");
+  private static final String PLUGINPATH = setting("scip.pluginpath", "SCIP_PLUGINPATH");
+  private static final String SOURCEROOT = setting("scip.sourceroot", "SCIP_SOURCEROOT");
+  private static final String TARGETROOT = setting("scip.targetroot", "SCIP_TARGETROOT");
+  private static final String GRAPH_ROOT = setting("scip.graph.root", "SCIP_GRAPH_ROOT");
+  private static final String GRAPH_TARGET = setting("scip.graph.target", "SCIP_GRAPH_TARGET");
   private static final boolean GRAPH_ENABLED =
-      Boolean.parseBoolean(System.getProperty("scip.graph.enabled", "false"));
-  private static final String OUTPUT = System.getProperty("scip.output", "");
-  private static final String OLD_OUTPUT = System.getProperty("scip.old-output", "");
+      Boolean.parseBoolean(setting("scip.graph.enabled", "SCIP_GRAPH_ENABLED"));
+  private static final String OUTPUT = setting("scip.output", "SCIP_OUTPUT");
+  private static final String OLD_OUTPUT = setting("scip.old-output", "SCIP_OLD_JAVAC_OPTS");
+
+  private static String setting(String property, String environment) {
+    String value = System.getProperty(property);
+    return value != null ? value : System.getenv().getOrDefault(environment, "");
+  }
 
   public void processArgument(String arg) {
     oldArgs.add(arg);
@@ -52,7 +62,7 @@ public class ScipOptionBuilder {
     previousArg = arg;
   }
 
-  private String unwrapQuote(String arg) {
+  private static String unwrapQuote(String arg) {
     if (arg.startsWith("\"") && arg.endsWith("\"")) {
       return arg.substring(1, arg.length() - 1);
     } else {
@@ -146,33 +156,131 @@ public class ScipOptionBuilder {
     String target = graphTarget();
     String targetKey = JavaGraphShard.digest(target);
     Path root = Paths.get(GRAPH_ROOT).resolve(".universe");
-    Path seen = root.resolve(".seen").resolve(targetKey);
-    Path output = root.resolve(targetKey + ".args");
-    Files.createDirectories(seen.getParent());
-    boolean firstInvocation;
-    try {
-      Files.createFile(seen);
-      firstInvocation = true;
-    } catch (FileAlreadyExistsException ignored) {
-      firstInvocation = false;
-    }
     List<String> invocation = new ArrayList<>();
     invocation.add("@invocation");
-    for (String argument : oldArgs) invocation.add(encodedValue(argument));
-    if (firstInvocation) {
-      Files.write(
-          output,
-          invocation,
-          StandardCharsets.UTF_8,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.TRUNCATE_EXISTING);
-    } else {
-      Files.write(
-          output,
-          invocation,
-          StandardCharsets.UTF_8,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.APPEND);
+    Path plugin = Paths.get(PLUGINPATH).toAbsolutePath().normalize();
+    invocation.add("@plugin");
+    invocation.add(encodedValue(graphPluginDigest(plugin)));
+    for (String argument : oldArgs) {
+      invocation.add(encodedValue(graphUniverseArgument(argument, plugin.getParent())));
     }
+    writeGraphInvocation(
+        root, targetKey, graphInvocationSlot(oldArgs, plugin.getParent()), invocation);
+  }
+
+  static String graphInvocationSlot(List<String> arguments, Path scratch) {
+    String output = null;
+    for (int index = 0; index < arguments.size(); index++) {
+      String argument = unwrapQuote(arguments.get(index));
+      if ("-d".equals(argument) && index + 1 < arguments.size()) {
+        output = unwrapQuote(arguments.get(index + 1));
+      } else if (argument.startsWith("-d=") && argument.length() > 3) {
+        output = argument.substring(3);
+      }
+    }
+    if (output == null) return JavaGraphShard.digest("default-output");
+    return JavaGraphShard.digest(graphUniverseArgument(output, scratch));
+  }
+
+  static void writeGraphInvocation(
+      Path root, String targetKey, String slotKey, List<String> invocation) throws IOException {
+    byte[] content = (String.join("\n", invocation) + "\n").getBytes(StandardCharsets.UTF_8);
+    Path directory = root.resolve(targetKey + ".args.d");
+    Path output = directory.resolve(slotKey + ".args");
+    Files.createDirectories(directory);
+    Object processLock = GRAPH_INVOCATION_LOCKS.computeIfAbsent(output, ignored -> new Object());
+    synchronized (processLock) {
+      Path locks = root.resolve(".locks");
+      Files.createDirectories(locks);
+      Path lockFile = locks.resolve(targetKey + "-" + slotKey + ".lock");
+      try (FileChannel channel =
+              FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+          var ignored = channel.lock()) {
+        writeGraphInvocation(output, content);
+      }
+    }
+  }
+
+  private static void writeGraphInvocation(Path output, byte[] content) throws IOException {
+    Path directory = output.getParent();
+    String slotKey = output.getFileName().toString().replaceFirst("\\.args$", "");
+    Path temporary =
+        directory.resolve(
+            slotKey
+                + ".tmp-"
+                + ProcessHandle.current().pid()
+                + "-"
+                + Thread.currentThread().getId());
+    Files.write(
+        temporary, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    try {
+      try {
+        Files.move(
+            temporary, output, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+      } catch (AtomicMoveNotSupportedException ignored) {
+        Files.move(temporary, output, StandardCopyOption.REPLACE_EXISTING);
+      }
+    } finally {
+      Files.deleteIfExists(temporary);
+    }
+  }
+
+  static String graphPluginDigest(Path plugin) throws IOException {
+    return JavaGraphShard.digest(Files.readAllBytes(plugin));
+  }
+
+  static String graphUniverseArgument(String argument, Path scratch) {
+    String scratchPath = scratch.toAbsolutePath().normalize().toString();
+    String comparison = comparablePath(argument);
+    String needle = comparablePath(scratchPath);
+    StringBuilder identity = new StringBuilder("v1");
+    int cursor = 0;
+    while (cursor < argument.length()) {
+      int match = comparison.indexOf(needle, cursor);
+      while (match >= 0
+          && (!pathBoundary(argument, match - 1, true)
+              || !pathBoundary(argument, match + scratchPath.length(), false))) {
+        match = comparison.indexOf(needle, match + 1);
+      }
+      if (match < 0) {
+        literal(identity, argument.substring(cursor));
+        break;
+      }
+      literal(identity, argument.substring(cursor, match));
+      identity.append("|tool");
+      cursor = match + scratchPath.length();
+      if (File.separatorChar == '\\'
+          && cursor < argument.length()
+          && (argument.charAt(cursor) == '/' || argument.charAt(cursor) == '\\')) {
+        identity.append("|separator");
+        cursor++;
+      }
+    }
+    if (argument.isEmpty()) literal(identity, "");
+    return identity.toString();
+  }
+
+  private static String comparablePath(String value) {
+    if (File.separatorChar != '\\') return value;
+    StringBuilder comparable = new StringBuilder(value.length());
+    for (int index = 0; index < value.length(); index++) {
+      char character = value.charAt(index);
+      if (character == '\\') character = '/';
+      if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+      comparable.append(character);
+    }
+    return comparable.toString();
+  }
+
+  private static boolean pathBoundary(String value, int index, boolean before) {
+    if (index < 0 || index >= value.length()) return true;
+    char character = value.charAt(index);
+    return Character.isWhitespace(character)
+        || "=;:\"'".indexOf(character) >= 0
+        || (!before && (character == '/' || (File.separatorChar == '\\' && character == '\\')));
+  }
+
+  private static void literal(StringBuilder identity, String value) {
+    identity.append("|literal:").append(encodedValue(value));
   }
 }

@@ -39,7 +39,8 @@ class GradleBuildToolTest : BuildToolHarness() {
                     StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.CREATE,
                 )
-                listOf("gradle", "wrapper", "--gradle-version", GRADLE_VERSION)
+                val gradle = if (java.io.File.separatorChar == '\\') "gradle.bat" else "gradle"
+                listOf(gradle, "wrapper", "--gradle-version", GRADLE_VERSION)
             },
             maxJdk = GRADLE_MAX_JDK,
         )

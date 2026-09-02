@@ -12,6 +12,8 @@ import java.nio.file.Path;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
@@ -377,6 +379,161 @@ class JavaGraphShardTest {
 
     assertEquals(target, options.graphTarget);
     assertTrue(options.errors.isEmpty(), options.errors::toString);
+  }
+
+  @Test
+  void graphUniverseNormalizesOnlyTheProducerScratchPath(@TempDir Path root) throws IOException {
+    Path scratch = root.resolve("Tool Root");
+    Files.createDirectories(scratch);
+    Path firstPlugin = scratch.resolve("first.jar");
+    Path secondPlugin = root.resolve("Other Root/second.jar");
+    Files.createDirectories(secondPlugin.getParent());
+    Files.writeString(firstPlugin, "same bytes");
+    Files.writeString(secondPlugin, "same bytes");
+    String expectedDigest = "58100dc8fc06562ce3e578231dc948e083520ee49c4b4ee5a5a28bb4b4003feb";
+    assertEquals(expectedDigest, ScipOptionBuilder.graphPluginDigest(firstPlugin));
+    assertEquals(expectedDigest, ScipOptionBuilder.graphPluginDigest(secondPlugin));
+    Files.writeString(secondPlugin, "different bytes");
+    assertFalse(expectedDigest.equals(ScipOptionBuilder.graphPluginDigest(secondPlugin)));
+
+    String actualPath = scratch.resolve("plugin.jar").toString();
+    String movedPath = root.resolve("Another Tool Root/plugin.jar").toString();
+    assertEquals(
+        ScipOptionBuilder.graphUniverseArgument("-cp=" + actualPath, scratch),
+        ScipOptionBuilder.graphUniverseArgument(
+            "-cp=" + movedPath, root.resolve("Another Tool Root")));
+    assertFalse(
+        ScipOptionBuilder.graphUniverseArgument("-Avalue=a\\b", scratch)
+            .equals(ScipOptionBuilder.graphUniverseArgument("-Avalue=a/b", scratch)));
+    assertFalse(
+        ScipOptionBuilder.graphUniverseArgument(
+                scratch + "-two" + java.io.File.separator + "plugin.jar", scratch)
+            .equals(ScipOptionBuilder.graphUniverseArgument(actualPath, scratch)));
+    String literalToken = "${SCIP_JAVA_TOOL}";
+    String encodedLiteral =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(literalToken.getBytes(StandardCharsets.UTF_8));
+    assertEquals(
+        "v1|literal:" + encodedLiteral,
+        ScipOptionBuilder.graphUniverseArgument(literalToken, scratch));
+    String repeated =
+        ScipOptionBuilder.graphUniverseArgument(actualPath + ",next=" + actualPath, scratch);
+    assertEquals(2, count(repeated, "|tool"));
+    assertEquals(
+        ScipOptionBuilder.graphUniverseArgument("-Aİ=" + actualPath, scratch),
+        ScipOptionBuilder.graphUniverseArgument(
+            "-Aİ=" + movedPath, root.resolve("Another Tool Root")));
+    if (java.io.File.separatorChar == '\\') {
+      String portable = actualPath.replace('\\', '/');
+      int separator = portable.indexOf('/', 3);
+      String mixed = portable.substring(0, separator) + "\\" + portable.substring(separator + 1);
+      assertEquals(
+          ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
+          ScipOptionBuilder.graphUniverseArgument(mixed, scratch));
+      assertEquals(
+          ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
+          ScipOptionBuilder.graphUniverseArgument(
+              actualPath.replace("Tool Root", "TOOL ROOT"), scratch));
+      assertFalse(
+          ScipOptionBuilder.graphUniverseArgument("-Avalue=" + scratch + "\\child,UPPER", scratch)
+              .equals(
+                  ScipOptionBuilder.graphUniverseArgument(
+                      "-Avalue=" + scratch + "\\child,upper", scratch)));
+      assertEquals(
+          ScipOptionBuilder.graphUniverseArgument(
+              "-cp=" + scratch + "\\Child Space\\plugin.jar", scratch),
+          ScipOptionBuilder.graphUniverseArgument(
+              "-cp=" + root.resolve("Another Tool Root") + "/Child Space\\plugin.jar",
+              root.resolve("Another Tool Root")));
+    } else {
+      assertFalse(
+          ScipOptionBuilder.graphUniverseArgument(scratch + "\\child", scratch)
+              .equals(ScipOptionBuilder.graphUniverseArgument(scratch + "/child", scratch)));
+    }
+  }
+
+  @Test
+  void graphUniverseWritesConcurrentInvocationsWithoutSharedAppendState(@TempDir Path root) {
+    List<String> first = List.of("@invocation", "@plugin", "plugin", "argument-a");
+    List<String> second = List.of("@invocation", "@plugin", "plugin", "argument-b");
+    String firstSlot = JavaGraphShard.digest("main-output");
+    String secondSlot = JavaGraphShard.digest("test-output");
+    String classes = root.resolve("classes").toString();
+    String testClasses = root.resolve("test-classes").toString();
+    String classesSlot =
+        JavaGraphShard.digest(ScipOptionBuilder.graphUniverseArgument(classes, root));
+    String testClassesSlot =
+        JavaGraphShard.digest(ScipOptionBuilder.graphUniverseArgument(testClasses, root));
+    assertEquals(
+        classesSlot,
+        ScipOptionBuilder.graphInvocationSlot(
+            List.of("-classpath", "dependency.jar", "-d", classes), root));
+    assertEquals(
+        classesSlot,
+        ScipOptionBuilder.graphInvocationSlot(
+            List.of("\"-classpath\"", "\"dependency.jar\"", "\"-d\"", "\"" + classes + "\""),
+            root));
+    assertEquals(
+        classesSlot,
+        ScipOptionBuilder.graphInvocationSlot(List.of("\"-d=" + classes + "\""), root));
+    assertEquals(
+        testClassesSlot,
+        ScipOptionBuilder.graphInvocationSlot(
+            List.of("\"-d\"", "\"" + classes + "\"", "-d=" + testClasses), root));
+    assertEquals(
+        JavaGraphShard.digest("default-output"),
+        ScipOptionBuilder.graphInvocationSlot(List.of("-classpath", "dependency.jar"), root));
+    var executor = Executors.newFixedThreadPool(8);
+    try {
+      List<CompletableFuture<Void>> writers =
+          java.util.stream.IntStream.range(0, 64)
+              .mapToObj(
+                  index ->
+                      CompletableFuture.runAsync(
+                          () -> {
+                            try {
+                              ScipOptionBuilder.writeGraphInvocation(
+                                  root,
+                                  "target",
+                                  index % 2 == 0 ? firstSlot : secondSlot,
+                                  index % 2 == 0 ? first : second);
+                            } catch (IOException exception) {
+                              throw new UncheckedIOException(exception);
+                            }
+                          },
+                          executor))
+              .toList();
+      writers.forEach(CompletableFuture::join);
+    } finally {
+      executor.shutdownNow();
+    }
+    Path directory = root.resolve("target.args.d");
+    try (var files = Files.list(directory)) {
+      List<Path> invocations = files.filter(Files::isRegularFile).sorted().toList();
+      assertEquals(2, invocations.size());
+      assertEquals(
+          List.of(firstSlot + ".args", secondSlot + ".args").stream().sorted().toList(),
+          invocations.stream().map(path -> path.getFileName().toString()).sorted().toList());
+      assertEquals(
+          List.of(first, second).stream()
+              .map(lines -> String.join("\n", lines) + "\n")
+              .sorted()
+              .toList(),
+          invocations.stream()
+              .map(
+                  invocation -> {
+                    try {
+                      return Files.readString(invocation);
+                    } catch (IOException exception) {
+                      throw new UncheckedIOException(exception);
+                    }
+                  })
+              .sorted()
+              .toList());
+    } catch (IOException exception) {
+      throw new UncheckedIOException(exception);
+    }
   }
 
   private static String compile(Path root, String source) {

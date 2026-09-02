@@ -41,7 +41,7 @@ internal object MavenGraphPlugin {
             StandardCharsets.UTF_8,
         )
         val probe = mutableListOf(mavenScript)
-        probe += repositorySelectionArguments(buildCommand)
+        probe += effectiveRepositorySelectionArguments(index.workingDirectory, buildCommand)
         probe += "--batch-mode"
         probe += listOf("--file", probePom.toString())
         probe += "org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate"
@@ -99,37 +99,104 @@ internal object MavenGraphPlugin {
         return Installation(ProcessResult(0), "$group:$artifact:$version:reactor")
     }
 
-    private fun repositorySelectionArguments(arguments: List<String>): List<String> {
-        val output = mutableListOf<String>()
+    private fun repositorySelection(arguments: List<String>): RepositorySelection {
+        var settings: List<String>? = null
+        var globalSettings: List<String>? = null
+        var localRepository: List<String>? = null
+        var offline = false
         var index = 0
         while (index < arguments.size) {
             val argument = arguments[index]
             when {
-                argument in setOf("-s", "--settings", "-gs", "--global-settings") -> {
-                    output += argument
-                    if (index + 1 < arguments.size) output += arguments[++index]
+                argument in setOf("-s", "--settings") -> {
+                    if (settings == null && index + 1 < arguments.size) {
+                        settings = listOf(argument, arguments[++index])
+                    }
+                }
+                argument in setOf("-gs", "--global-settings") -> {
+                    if (globalSettings == null && index + 1 < arguments.size) {
+                        globalSettings = listOf(argument, arguments[++index])
+                    }
                 }
                 argument in setOf("-D", "--define") -> {
                     if (
                         index + 1 < arguments.size &&
                             arguments[index + 1].startsWith("maven.repo.local=")
                     ) {
-                        output += argument
-                        output += arguments[++index]
+                        localRepository = listOf(argument, arguments[++index])
+                    } else if (
+                        index + 2 < arguments.size && arguments[index + 1] == "maven.repo.local"
+                    ) {
+                        localRepository = listOf(argument, arguments[++index], arguments[++index])
                     }
                 }
-                (argument.startsWith("-s") && !argument.startsWith("--") && argument.length > 2) ||
-                    (argument.startsWith("-gs") && argument.length > 3) -> output += argument
-                argument.startsWith("--settings=") ||
-                    argument.startsWith("--global-settings=") ||
-                    argument.startsWith("-Dmaven.repo.local=") ||
-                    argument.startsWith("--define=maven.repo.local=") -> output += argument
-                argument in setOf("-o", "--offline") -> output += argument
+                settings == null &&
+                    ((argument.startsWith("-s") &&
+                        !argument.startsWith("--") &&
+                        !argument.startsWith("-gs") &&
+                        argument.length > 2) || argument.startsWith("--settings=")) ->
+                    settings = listOf(argument)
+                globalSettings == null &&
+                    ((argument.startsWith("-gs") && argument.length > 3) ||
+                        argument.startsWith("--global-settings=")) ->
+                    globalSettings = listOf(argument)
+                argument.startsWith("-Dmaven.repo.local=") ||
+                    argument.startsWith("--define=maven.repo.local=") ->
+                    localRepository = listOf(argument)
+                argument in setOf("-o", "--offline") -> offline = true
             }
             index += 1
         }
-        return output
+        return RepositorySelection(settings, globalSettings, localRepository, offline)
     }
+
+    fun projectRepositorySelectionArguments(root: Path): List<String> {
+        return repositorySelection(projectConfigArguments(root)).localRepository ?: emptyList()
+    }
+
+    fun effectiveRepositorySelectionArguments(root: Path, cli: List<String>): List<String> {
+        val project = repositorySelection(projectConfigArguments(root))
+        val command = repositorySelection(cli)
+        return buildList {
+            addAll(command.settings ?: project.settings ?: emptyList())
+            addAll(command.globalSettings ?: project.globalSettings ?: emptyList())
+            addAll(command.localRepository ?: project.localRepository ?: emptyList())
+            if (project.offline || command.offline) add("--offline")
+        }
+    }
+
+    private fun projectConfigArguments(root: Path): List<String> {
+        val config = root.resolve(".mvn/maven.config")
+        if (!Files.isRegularFile(config)) return emptyList()
+        return Files.readAllLines(config, StandardCharsets.UTF_8)
+            .map(String::trim)
+            .filter { value -> value.isNotEmpty() && !value.startsWith("#") }
+            .map(::normalizeConfigArgument)
+    }
+
+    private fun normalizeConfigArgument(value: String): String {
+        val unquoted = value.removeSurrounding("\"")
+        for (prefix in
+            listOf(
+                "-Dmaven.repo.local=",
+                "--define=maven.repo.local=",
+                "maven.repo.local=",
+                "--settings=",
+                "--global-settings=",
+            )) {
+            if (unquoted.startsWith(prefix)) {
+                return prefix + unquoted.removePrefix(prefix).removeSurrounding("\"")
+            }
+        }
+        return unquoted
+    }
+
+    private data class RepositorySelection(
+        val settings: List<String>?,
+        val globalSettings: List<String>?,
+        val localRepository: List<String>?,
+        val offline: Boolean,
+    )
 
     private fun installFile(source: Path, destination: Path) {
         val candidate = destination.resolveSibling("${destination.fileName}.tmp")

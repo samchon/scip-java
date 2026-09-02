@@ -74,6 +74,46 @@ final class GraphGenerationStore {
     return targetKey;
   }
 
+  /** Whether Gradle may reuse compiled outputs without bypassing a required graph refresh. */
+  boolean matchesCurrent(Set<java.io.File> taskSources, List<String> universe) {
+    try {
+      Path generation = currentGeneration();
+      if (generation == null) return false;
+      if (!generation.getFileName().toString().equals(generationDigest(generation))) return false;
+      for (String required : List.of("TARGET", "UNIVERSE", "SOURCES", DECLARED_SOURCES)) {
+        if (!Files.isRegularFile(generation.resolve(required))) return false;
+      }
+      List<String> declared = new ArrayList<>();
+      for (java.io.File source : taskSources) {
+        declared.add(relativeSource(source.toPath().toAbsolutePath().normalize()));
+      }
+      declared = new ArrayList<>(new LinkedHashSet<>(declared));
+      declared.sort(GraphGenerationStore::compareUtf8);
+      if (!declared.equals(readOrderedLines(generation.resolve(DECLARED_SOURCES)))) return false;
+      if (!List.of(target).equals(readOrderedLines(generation.resolve("TARGET")))) return false;
+      if (!universe.equals(readOrderedLines(generation.resolve("UNIVERSE")))) return false;
+      List<String> actualSources = new ArrayList<>();
+      for (Path shard : graphShards(generation)) {
+        ShardMetadata metadata = shardMetadata(shard);
+        String expectedSource = shardSource(generation.relativize(shard));
+        if (!metadata.source().equals(expectedSource) || !metadata.target().equals(target)) {
+          return false;
+        }
+        validateSource(metadata, shard);
+        actualSources.add(expectedSource);
+      }
+      actualSources = new ArrayList<>(new LinkedHashSet<>(actualSources));
+      actualSources.sort(GraphGenerationStore::compareUtf8);
+      List<String> recordedSources = readOrderedLines(generation.resolve("SOURCES"));
+      if (!recordedSources.equals(actualSources) || !recordedSources.containsAll(declared)) {
+        return false;
+      }
+      return true;
+    } catch (IOException | RuntimeException ignored) {
+      return false;
+    }
+  }
+
   /** Start from the prior committed generation; no published pointer changes here. */
   void prepare() {
     try {
@@ -124,6 +164,9 @@ final class GraphGenerationStore {
       }
       deleteEmptyDirectories(staging);
       deleteTree(staging.resolve(SEEN_ROOT));
+      // Maven consumes compiler invocation universes. Gradle owns its universe above and must not
+      // let the javac transport's scheduling records enter its committed generation.
+      deleteTree(staging.resolve(".universe"));
       writeAtomic(staging.resolve("TARGET"), List.of(target));
       List<String> orderedSources = new ArrayList<>();
       for (Path shard : graphShards(staging)) {
@@ -354,6 +397,12 @@ final class GraphGenerationStore {
     return Files.isRegularFile(input)
         ? new LinkedHashSet<>(Files.readAllLines(input, StandardCharsets.UTF_8))
         : Set.of();
+  }
+
+  private static List<String> readOrderedLines(Path input) throws IOException {
+    return Files.isRegularFile(input)
+        ? Files.readAllLines(input, StandardCharsets.UTF_8)
+        : List.of();
   }
 
   private static String generationDigest(Path root) throws IOException {
