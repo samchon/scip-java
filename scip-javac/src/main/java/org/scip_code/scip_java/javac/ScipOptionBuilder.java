@@ -12,10 +12,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
-import java.util.Set;
 
 public class ScipOptionBuilder {
   private String previousArg = "";
@@ -189,27 +186,17 @@ public class ScipOptionBuilder {
   }
 
   static String graphUniverseArgument(String argument, Path scratch) {
-    Set<String> variants = new LinkedHashSet<>();
-    variants.add(scratch.toAbsolutePath().normalize().toString());
-    variants.add(javacPath(scratch.toAbsolutePath().normalize().toString()));
+    String scratchPath = scratch.toAbsolutePath().normalize().toString();
     String comparison = comparablePath(argument);
+    String needle = comparablePath(scratchPath);
     StringBuilder identity = new StringBuilder("v1");
     int cursor = 0;
     while (cursor < argument.length()) {
-      int match = -1;
-      int length = 0;
-      for (String variant : variants) {
-        String needle = comparablePath(variant);
-        int candidate = comparison.indexOf(needle, cursor);
-        while (candidate >= 0
-            && (!pathBoundary(argument, candidate - 1, true)
-                || !pathBoundary(argument, candidate + variant.length(), false))) {
-          candidate = comparison.indexOf(needle, candidate + 1);
-        }
-        if (candidate >= 0 && (match < 0 || candidate < match)) {
-          match = candidate;
-          length = variant.length();
-        }
+      int match = comparison.indexOf(needle, cursor);
+      while (match >= 0
+          && (!pathBoundary(argument, match - 1, true)
+              || !pathBoundary(argument, match + scratchPath.length(), false))) {
+        match = comparison.indexOf(needle, match + 1);
       }
       if (match < 0) {
         literal(identity, argument.substring(cursor));
@@ -217,14 +204,22 @@ public class ScipOptionBuilder {
       }
       literal(identity, argument.substring(cursor, match));
       identity.append("|tool");
-      cursor = match + length;
+      cursor = match + scratchPath.length();
     }
     if (argument.isEmpty()) literal(identity, "");
     return identity.toString();
   }
 
   private static String comparablePath(String value) {
-    return File.separatorChar == '\\' ? value.toLowerCase(Locale.ROOT) : value;
+    if (File.separatorChar != '\\') return value;
+    StringBuilder comparable = new StringBuilder(value.length());
+    for (int index = 0; index < value.length(); index++) {
+      char character = value.charAt(index);
+      if (character == '\\') character = '/';
+      if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+      comparable.append(character);
+    }
+    return comparable.toString();
   }
 
   private static boolean pathBoundary(String value, int index, boolean before) {
@@ -232,7 +227,8 @@ public class ScipOptionBuilder {
     char character = value.charAt(index);
     return Character.isWhitespace(character)
         || "=;:\"'".indexOf(character) >= 0
-        || (!before && (character == '/' || character == '\\'));
+        || (!before
+            && (character == '/' || (File.separatorChar == '\\' && character == '\\')));
   }
 
   private static void literal(StringBuilder identity, String value) {

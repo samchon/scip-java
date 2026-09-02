@@ -385,12 +385,16 @@ class JavaGraphShardTest {
     Path scratch = root.resolve("Tool Root");
     Files.createDirectories(scratch);
     Path firstPlugin = scratch.resolve("first.jar");
-    Path secondPlugin = scratch.resolve("second.jar");
-    Files.writeString(firstPlugin, "first");
-    Files.writeString(secondPlugin, "second");
+    Path secondPlugin = root.resolve("Other Root/second.jar");
+    Files.createDirectories(secondPlugin.getParent());
+    Files.writeString(firstPlugin, "same bytes");
+    Files.writeString(secondPlugin, "same bytes");
+    String expectedDigest = "58100dc8fc06562ce3e578231dc948e083520ee49c4b4ee5a5a28bb4b4003feb";
+    assertEquals(expectedDigest, ScipOptionBuilder.graphPluginDigest(firstPlugin));
+    assertEquals(expectedDigest, ScipOptionBuilder.graphPluginDigest(secondPlugin));
+    Files.writeString(secondPlugin, "different bytes");
     assertFalse(
-        ScipOptionBuilder.graphPluginDigest(firstPlugin)
-            .equals(ScipOptionBuilder.graphPluginDigest(secondPlugin)));
+        expectedDigest.equals(ScipOptionBuilder.graphPluginDigest(secondPlugin)));
 
     String actualPath = scratch.resolve("plugin.jar").toString();
     String movedPath = root.resolve("Another Tool Root/plugin.jar").toString();
@@ -408,11 +412,28 @@ class JavaGraphShardTest {
     assertFalse(
         ScipOptionBuilder.graphUniverseArgument("${SCIP_JAVA_TOOL}", scratch)
             .equals(ScipOptionBuilder.graphUniverseArgument(actualPath, scratch)));
+    assertEquals(
+        ScipOptionBuilder.graphUniverseArgument("-Aİ=" + actualPath, scratch),
+        ScipOptionBuilder.graphUniverseArgument(
+            "-Aİ=" + movedPath, root.resolve("Another Tool Root")));
     if (java.io.File.separatorChar == '\\') {
+      String portable = actualPath.replace('\\', '/');
+      int separator = portable.indexOf('/', 3);
+      String mixed =
+          portable.substring(0, separator)
+              + "\\"
+              + portable.substring(separator + 1);
+      assertEquals(
+          ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
+          ScipOptionBuilder.graphUniverseArgument(mixed, scratch));
       assertEquals(
           ScipOptionBuilder.graphUniverseArgument(actualPath, scratch),
           ScipOptionBuilder.graphUniverseArgument(
               actualPath.toUpperCase(java.util.Locale.ROOT), scratch));
+    } else {
+      assertFalse(
+          ScipOptionBuilder.graphUniverseArgument(scratch + "\\child", scratch)
+              .equals(ScipOptionBuilder.graphUniverseArgument(scratch + "/child", scratch)));
     }
   }
 
