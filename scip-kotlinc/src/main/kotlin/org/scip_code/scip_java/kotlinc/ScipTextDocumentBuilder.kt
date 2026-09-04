@@ -39,7 +39,7 @@ class ScipTextDocumentBuilder(
     private val cache: SymbolsCache,
 ) {
     private val documentBuilder = ScipDocumentBuilder()
-    private val fileText = file.getContentsAsStream().reader().readText()
+    private val fileText = file.getContentsAsStream().reader().use { it.readText() }
 
     fun build(): Document = documentBuilder.build("kotlin", relativePath(), fileText)
 

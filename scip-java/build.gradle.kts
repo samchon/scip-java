@@ -13,6 +13,8 @@ description = "Java and Kotlin indexer for SCIP"
 
 val javacShadowJar = shadowJarArtifact(":scip-javac", "javacShadowJar")
 val gradlePluginShadowJar = shadowJarArtifact(":scip-gradle-plugin", "gradlePluginShadowJar")
+val kotlinGradlePluginShadowJar =
+    shadowJarArtifact(":scip-kotlin-gradle-plugin", "kotlinGradlePluginShadowJar")
 val kotlincShadowJar = shadowJarArtifact(":scip-kotlinc", "kotlincShadowJar")
 
 dependencies {
@@ -45,6 +47,9 @@ val generateEmbeddedResources = tasks.register<Sync>("generateEmbeddedResources"
     }
     from(gradlePluginShadowJar) {
         rename { "gradle-plugin.jar" }
+    }
+    from(kotlinGradlePluginShadowJar) {
+        rename { "kotlin-gradle-plugin.jar" }
     }
     from(kotlincShadowJar) {
         rename { "scip-kotlinc.jar" }

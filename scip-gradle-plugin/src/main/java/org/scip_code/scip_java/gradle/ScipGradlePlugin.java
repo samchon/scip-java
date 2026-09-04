@@ -15,6 +15,36 @@ public class ScipGradlePlugin implements Plugin<Project> {
 
   @Override
   public void apply(Project project) {
+    Map<String, Object> extra = project.getExtensions().getExtraProperties().getProperties();
+    boolean kotlinGraphEnabled =
+        Boolean.parseBoolean(String.valueOf(extra.getOrDefault("scipKotlinGraphEnabled", false)));
+    if (kotlinGraphEnabled) {
+      project
+          .getPluginManager()
+          .withPlugin(
+              "org.jetbrains.kotlin.jvm",
+              ignored -> project.getPlugins().apply("org.scip-code.kotlin-graph"));
+      project
+          .getPluginManager()
+          .withPlugin(
+              "org.jetbrains.kotlin.multiplatform",
+              ignored ->
+                  project
+                      .getLogger()
+                      .warn(
+                          "scip-java: Kotlin graph exporter declines multiplatform project '{}'; only Kotlin/JVM is supported",
+                          project.getPath()));
+      project
+          .getPluginManager()
+          .withPlugin(
+              "com.android.base",
+              ignored ->
+                  project
+                      .getLogger()
+                      .warn(
+                          "scip-java: Kotlin graph exporter declines Android project '{}'",
+                          project.getPath()));
+    }
     project.afterEvaluate(this::configureProject);
   }
 
@@ -38,6 +68,9 @@ public class ScipGradlePlugin implements Plugin<Project> {
 
     String targetRoot = requiredExtra(extraProperties, "scipTarget").toString();
     String sourceRoot = project.getRootDir().toString();
+    boolean kotlinGraphEnabled =
+        Boolean.parseBoolean(
+            String.valueOf(extraProperties.getOrDefault("scipKotlinGraphEnabled", false)));
 
     // Compilation tasks we need to trigger to index all the sources we care
     // about. Built up as we detect the java and kotlin plugins.
@@ -112,11 +145,13 @@ public class ScipGradlePlugin implements Plugin<Project> {
       }
 
       // The CLI's init script provides the path of the embedded scip-kotlinc jar.
-      Object scipKotlinc = requiredExtra(extraProperties, "scipKotlincJar");
-      project
-          .getTasks()
-          .configureEach(
-              task -> configureKotlinCompileTask(task, scipKotlinc, sourceRoot, targetRoot));
+      if (!kotlinGraphEnabled) {
+        Object scipKotlinc = requiredExtra(extraProperties, "scipKotlincJar");
+        project
+            .getTasks()
+            .configureEach(
+                task -> configureKotlinCompileTask(task, scipKotlinc, sourceRoot, targetRoot));
+      }
     }
 
     project.getTasks().create("scipCompileAll").dependsOn(triggers);

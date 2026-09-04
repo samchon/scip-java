@@ -60,6 +60,14 @@ class IndexCommand : CliktCommand(name = "index") {
             )
             .path()
 
+    val kotlinGraphOutput: Path? by
+        option(
+                "--kotlin-graph-output",
+                hidden = true,
+                help = "Write a compiler-owned Kotlin graph snapshot instead of a SCIP index.",
+            )
+            .path()
+
     val buildTool: String? by
         option(
             "--build-tool",

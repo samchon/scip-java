@@ -29,7 +29,6 @@ import org.scip_code.scip.Document
 import org.scip_code.scip.Occurrence
 import org.scip_code.scip.SymbolInformation
 import org.scip_code.scip_java.kotlinc.*
-import org.scip_code.scip_java.kotlinc.AnalyzerCheckers.Companion.visitors
 import org.scip_code.scip_java.shared.ScipOptions
 
 data class ExpectedSymbols(
@@ -128,7 +127,8 @@ private class TestAnalyzerDeclarationCheckers(
     globals: GlobalSymbolsCache,
     locals: LocalSymbolsCache,
     sourceRoot: Path,
-) : AnalyzerCheckers.AnalyzerDeclarationCheckers(sourceRoot) {
+    private val state: AnalyzerCompilationState,
+) : AnalyzerCheckers.AnalyzerDeclarationCheckers(sourceRoot, state = state) {
     override val fileCheckers: Set<FirFileChecker> =
         setOf(
             object : FirFileChecker(MppCheckerKind.Common) {
@@ -137,20 +137,24 @@ private class TestAnalyzerDeclarationCheckers(
                     val ktFile = declaration.sourceFile ?: return
                     val lineMap = LineMap(declaration)
                     val visitor = ScipVisitor(sourceRoot, ktFile, lineMap, globals, locals)
-                    visitors[ktFile] = visitor
+                    state.visitors[ktFile] = visitor
                 }
             },
-            AnalyzerCheckers.SemanticImportsChecker(),
+            AnalyzerCheckers.SemanticImportsChecker(state),
         )
 }
 
-private class TestAnalyzerCheckers(session: FirSession) : AnalyzerCheckers(session) {
+private class TestAnalyzerCheckers(
+    session: FirSession,
+    private val state: AnalyzerCompilationState,
+) : AnalyzerCheckers(session, state) {
     override val declarationCheckers: DeclarationCheckers
         get() =
             TestAnalyzerDeclarationCheckers(
                 session.testAnalyzerParamsProvider.globals,
                 session.testAnalyzerParamsProvider.locals,
                 session.testAnalyzerParamsProvider.sourceroot,
+                state,
             )
 }
 
@@ -183,11 +187,12 @@ fun scipVisitorAnalyzer(
 ): CompilerPluginRegistrar {
     return object : CompilerPluginRegistrar() {
         override fun ExtensionStorage.registerExtensions(configuration: CompilerConfiguration) {
+            val state = AnalyzerCompilationState(globals)
             FirExtensionRegistrarAdapter.registerExtension(
                 object : FirExtensionRegistrar() {
                     override fun ExtensionRegistrarContext.configurePlugin() {
                         +TestAnalyzerParamsProvider.getFactory(globals, locals, sourceroot)
-                        +::TestAnalyzerCheckers
+                        +{ session: FirSession -> TestAnalyzerCheckers(session, state) }
                     }
                 }
             )
@@ -197,6 +202,7 @@ fun scipVisitorAnalyzer(
                     sourceRoot = sourceroot,
                     targetRoot = Paths.get(""),
                     callback = hook,
+                    state = state,
                 )
             )
         }

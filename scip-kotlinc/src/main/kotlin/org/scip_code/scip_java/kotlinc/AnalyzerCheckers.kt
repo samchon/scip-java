@@ -10,6 +10,7 @@ import org.jetbrains.kotlin.fir.analysis.checkers.MppCheckerKind
 import org.jetbrains.kotlin.fir.analysis.checkers.context.CheckerContext
 import org.jetbrains.kotlin.fir.analysis.checkers.declaration.*
 import org.jetbrains.kotlin.fir.analysis.checkers.expression.ExpressionCheckers
+import org.jetbrains.kotlin.fir.analysis.checkers.expression.FirExpressionChecker
 import org.jetbrains.kotlin.fir.analysis.checkers.expression.FirQualifiedAccessExpressionChecker
 import org.jetbrains.kotlin.fir.analysis.checkers.expression.FirResolvedQualifierChecker
 import org.jetbrains.kotlin.fir.analysis.checkers.expression.FirTypeOperatorCallChecker
@@ -17,9 +18,12 @@ import org.jetbrains.kotlin.fir.analysis.checkers.toClassLikeSymbol
 import org.jetbrains.kotlin.fir.analysis.extensions.FirAdditionalCheckersExtension
 import org.jetbrains.kotlin.fir.declarations.*
 import org.jetbrains.kotlin.fir.declarations.utils.isCompanion
+import org.jetbrains.kotlin.fir.expressions.FirFunctionCall
+import org.jetbrains.kotlin.fir.expressions.FirPropertyAccessExpression
 import org.jetbrains.kotlin.fir.expressions.FirQualifiedAccessExpression
 import org.jetbrains.kotlin.fir.expressions.FirResolvedQualifier
 import org.jetbrains.kotlin.fir.expressions.FirTypeOperatorCall
+import org.jetbrains.kotlin.fir.expressions.FirVariableAssignment
 import org.jetbrains.kotlin.fir.references.FirResolvedNamedReference
 import org.jetbrains.kotlin.fir.resolve.calls.FirSyntheticFunctionSymbol
 import org.jetbrains.kotlin.fir.resolve.getContainingClassSymbol
@@ -32,10 +36,9 @@ import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.name.ClassId
 import org.jetbrains.kotlin.name.FqName
 
-open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtension(session) {
+open class AnalyzerCheckers(session: FirSession, private val state: AnalyzerCompilationState) :
+    FirAdditionalCheckersExtension(session) {
     companion object {
-        val visitors: MutableMap<KtSourceFile, ScipVisitor> = mutableMapOf()
-
         private fun getIdentifier(element: KtSourceElement): KtSourceElement =
             element.treeStructure
                 .findChildByType(element.lighterASTNode, KtTokens.IDENTIFIER)
@@ -52,63 +55,99 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
     }
 
     override val declarationCheckers: DeclarationCheckers
-        get() = AnalyzerDeclarationCheckers(session.analyzerParamsProvider.sourceroot)
+        get() =
+            AnalyzerDeclarationCheckers(
+                session.analyzerParamsProvider.sourceroot,
+                session.analyzerParamsProvider.graphRoot,
+                session.analyzerParamsProvider.graphTarget,
+                session.analyzerParamsProvider.graphMessages,
+                state,
+            )
 
     override val expressionCheckers: ExpressionCheckers
         get() =
             object : ExpressionCheckers() {
                 override val qualifiedAccessExpressionCheckers:
                     Set<FirQualifiedAccessExpressionChecker> =
-                    setOf(SemanticQualifiedAccessExpressionChecker())
+                    setOf(SemanticQualifiedAccessExpressionChecker(state))
 
                 override val resolvedQualifierCheckers: Set<FirResolvedQualifierChecker> =
-                    setOf(SemanticResolvedQualifierChecker())
+                    setOf(SemanticResolvedQualifierChecker(state))
 
                 override val typeOperatorCallCheckers: Set<FirTypeOperatorCallChecker> =
-                    setOf(SemanticClassReferenceExpressionChecker())
+                    setOf(SemanticClassReferenceExpressionChecker(state))
+
+                override val variableAssignmentCheckers:
+                    Set<FirExpressionChecker<FirVariableAssignment>> =
+                    setOf(SemanticVariableAssignmentChecker(state))
             }
 
-    open class AnalyzerDeclarationCheckers(sourceroot: Path) : DeclarationCheckers() {
+    open class AnalyzerDeclarationCheckers(
+        sourceroot: Path,
+        graphRoot: Path? = null,
+        graphTarget: String? = null,
+        private val graphMessages: KotlinGraphMessages? = null,
+        private val state: AnalyzerCompilationState,
+    ) : DeclarationCheckers() {
         override val fileCheckers: Set<FirFileChecker> =
-            setOf(SemanticFileChecker(sourceroot), SemanticImportsChecker())
-        override val classLikeCheckers: Set<FirClassLikeChecker> = setOf(SemanticClassLikeChecker())
+            setOf(
+                SemanticFileChecker(sourceroot, graphRoot, graphTarget, graphMessages, state),
+                SemanticImportsChecker(state),
+            )
+        override val classLikeCheckers: Set<FirClassLikeChecker> =
+            setOf(SemanticClassLikeChecker(state))
         override val constructorCheckers: Set<FirConstructorChecker> =
-            setOf(SemanticConstructorChecker())
+            setOf(SemanticConstructorChecker(state))
         override val simpleFunctionCheckers: Set<FirSimpleFunctionChecker> =
-            setOf(SemanticSimpleFunctionChecker())
+            setOf(SemanticSimpleFunctionChecker(state))
         override val anonymousFunctionCheckers: Set<FirAnonymousFunctionChecker> =
-            setOf(SemanticAnonymousFunctionChecker())
-        override val propertyCheckers: Set<FirPropertyChecker> = setOf(SemanticPropertyChecker())
+            setOf(SemanticAnonymousFunctionChecker(state))
+        override val propertyCheckers: Set<FirPropertyChecker> =
+            setOf(SemanticPropertyChecker(state))
         override val valueParameterCheckers: Set<FirValueParameterChecker> =
-            setOf(SemanticValueParameterChecker())
+            setOf(SemanticValueParameterChecker(state))
         override val typeParameterCheckers: Set<FirTypeParameterChecker> =
-            setOf(SemanticTypeParameterChecker())
-        override val typeAliasCheckers: Set<FirTypeAliasChecker> = setOf(SemanticTypeAliasChecker())
+            setOf(SemanticTypeParameterChecker(state))
+        override val typeAliasCheckers: Set<FirTypeAliasChecker> =
+            setOf(SemanticTypeAliasChecker(state))
         override val propertyAccessorCheckers: Set<FirPropertyAccessorChecker> =
-            setOf(SemanticPropertyAccessorChecker())
-        override val enumEntryCheckers: Set<FirEnumEntryChecker> = setOf(SemanticEnumEntryChecker())
+            setOf(SemanticPropertyAccessorChecker(state))
+        override val enumEntryCheckers: Set<FirEnumEntryChecker> =
+            setOf(SemanticEnumEntryChecker(state))
     }
 
-    private class SemanticFileChecker(private val sourceroot: Path) :
-        FirFileChecker(MppCheckerKind.Common) {
-        companion object {
-            val globals = GlobalSymbolsCache()
-        }
-
+    private class SemanticFileChecker(
+        private val sourceroot: Path,
+        private val graphRoot: Path?,
+        private val graphTarget: String?,
+        private val graphMessages: KotlinGraphMessages?,
+        private val state: AnalyzerCompilationState,
+    ) : FirFileChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirFile) {
             val ktFile = declaration.sourceFile ?: return
             val lineMap = LineMap(declaration)
-            val visitor = ScipVisitor(sourceroot, ktFile, lineMap, globals)
-            visitors[ktFile] = visitor
+            val visitor =
+                ScipVisitor(
+                    sourceroot,
+                    ktFile,
+                    lineMap,
+                    state.globals,
+                    graphRoot = graphRoot,
+                    graphTarget = graphTarget,
+                )
+            state.visitors[ktFile] = visitor
+            state.diagnosticReporters[ktFile] = reporter
+            graphMessages?.register(visitor)
         }
     }
 
-    class SemanticImportsChecker : FirFileChecker(MppCheckerKind.Common) {
+    class SemanticImportsChecker(private val state: AnalyzerCompilationState) :
+        FirFileChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirFile) {
             val ktFile = declaration.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
 
             val eachFqNameElement =
                 {
@@ -178,9 +217,11 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
 
                         if (klass != null) {
                             visitor?.visitClassReference(klass, name)
+                            visitor?.visitImport(klass, name, import.aliasName?.asString())
                         } else if (callables.isNotEmpty()) {
                             for (callable in callables) {
                                 visitor?.visitCallableReference(callable, name)
+                                visitor?.visitImport(callable, name, import.aliasName?.asString())
                             }
                         } else {
                             visitor?.visitPackage(fqName, name)
@@ -191,12 +232,13 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticClassLikeChecker : FirClassLikeChecker(MppCheckerKind.Common) {
+    private class SemanticClassLikeChecker(private val state: AnalyzerCompilationState) :
+        FirClassLikeChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirClassLikeDeclaration) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             val objectKeyword =
                 if (declaration is FirAnonymousObject) {
                     source.treeStructure
@@ -236,12 +278,13 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticConstructorChecker : FirConstructorChecker(MppCheckerKind.Common) {
+    private class SemanticConstructorChecker(private val state: AnalyzerCompilationState) :
+        FirConstructorChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirConstructor) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
 
             if (declaration.isPrimary) {
                 // if the constructor is not denoted by the 'constructor' keyword, we want to link
@@ -278,12 +321,13 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticSimpleFunctionChecker : FirSimpleFunctionChecker(MppCheckerKind.Common) {
+    private class SemanticSimpleFunctionChecker(private val state: AnalyzerCompilationState) :
+        FirSimpleFunctionChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirNamedFunction) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitNamedFunction(
                 declaration,
                 getIdentifier(source),
@@ -294,46 +338,49 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticAnonymousFunctionChecker :
+    private class SemanticAnonymousFunctionChecker(private val state: AnalyzerCompilationState) :
         FirAnonymousFunctionChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirAnonymousFunction) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitNamedFunction(declaration, source, enclosingSource = source)
         }
     }
 
-    private class SemanticPropertyChecker : FirPropertyChecker(MppCheckerKind.Common) {
+    private class SemanticPropertyChecker(private val state: AnalyzerCompilationState) :
+        FirPropertyChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirProperty) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitProperty(declaration, getIdentifier(source), enclosingSource = source)
             visitor?.emitTypeRef(declaration.returnTypeRef)
             declaration.receiverParameter?.typeRef?.let { visitor?.emitTypeRef(it) }
         }
     }
 
-    private class SemanticValueParameterChecker : FirValueParameterChecker(MppCheckerKind.Common) {
+    private class SemanticValueParameterChecker(private val state: AnalyzerCompilationState) :
+        FirValueParameterChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirValueParameter) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitParameter(declaration, getIdentifier(source), enclosingSource = source)
             visitor?.emitTypeRef(declaration.returnTypeRef)
         }
     }
 
-    private class SemanticTypeParameterChecker : FirTypeParameterChecker(MppCheckerKind.Common) {
+    private class SemanticTypeParameterChecker(private val state: AnalyzerCompilationState) :
+        FirTypeParameterChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirTypeParameter) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitTypeParameter(
                 declaration,
                 getIdentifier(source),
@@ -342,23 +389,24 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticTypeAliasChecker : FirTypeAliasChecker(MppCheckerKind.Common) {
+    private class SemanticTypeAliasChecker(private val state: AnalyzerCompilationState) :
+        FirTypeAliasChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirTypeAlias) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitTypeAlias(declaration, getIdentifier(source), enclosingSource = source)
         }
     }
 
-    private class SemanticPropertyAccessorChecker :
+    private class SemanticPropertyAccessorChecker(private val state: AnalyzerCompilationState) :
         FirPropertyAccessorChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirPropertyAccessor) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             val identifierSource =
                 if (declaration.isGetter) {
                     source.treeStructure
@@ -376,17 +424,18 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticEnumEntryChecker : FirEnumEntryChecker(MppCheckerKind.Common) {
+    private class SemanticEnumEntryChecker(private val state: AnalyzerCompilationState) :
+        FirEnumEntryChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(declaration: FirEnumEntry) {
             val source = declaration.source ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitEnumEntry(declaration, getIdentifier(source), enclosingSource = source)
         }
     }
 
-    private class SemanticResolvedQualifierChecker :
+    private class SemanticResolvedQualifierChecker(private val state: AnalyzerCompilationState) :
         FirResolvedQualifierChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(expression: FirResolvedQualifier) {
@@ -394,13 +443,14 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
             val source = expression.source ?: return
             if (source.kind is KtFakeSourceElementKind) return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             visitor?.visitClassReference(symbol, getIdentifier(source))
         }
     }
 
-    private class SemanticQualifiedAccessExpressionChecker :
-        FirQualifiedAccessExpressionChecker(MppCheckerKind.Common) {
+    private class SemanticQualifiedAccessExpressionChecker(
+        private val state: AnalyzerCompilationState
+    ) : FirQualifiedAccessExpressionChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(expression: FirQualifiedAccessExpression) {
             val source = expression.source ?: return
@@ -410,9 +460,18 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
             }
 
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
             val identifierSource = getIdentifier(calleeReference.source ?: source)
             visitor?.visitSimpleNameExpression(calleeReference, identifierSource)
+
+            when (expression) {
+                is FirFunctionCall ->
+                    (calleeReference.resolvedSymbol
+                            as? org.jetbrains.kotlin.fir.symbols.impl.FirCallableSymbol<*>)
+                        ?.let { visitor?.visitCall(it, identifierSource) }
+                is FirPropertyAccessExpression ->
+                    visitor?.visitAccess(calleeReference.resolvedSymbol, identifierSource, "read")
+            }
 
             val resolvedSymbol = calleeReference.resolvedSymbol
             if (
@@ -438,17 +497,35 @@ open class AnalyzerCheckers(session: FirSession) : FirAdditionalCheckersExtensio
         }
     }
 
-    private class SemanticClassReferenceExpressionChecker :
-        FirTypeOperatorCallChecker(MppCheckerKind.Common) {
+    private class SemanticClassReferenceExpressionChecker(
+        private val state: AnalyzerCompilationState
+    ) : FirTypeOperatorCallChecker(MppCheckerKind.Common) {
         context(context: CheckerContext, reporter: DiagnosticReporter)
         override fun check(expression: FirTypeOperatorCall) {
             val typeRef = expression.conversionTypeRef
             val source = typeRef.source ?: return
             val classSymbol = typeRef.toClassLikeSymbol(context.session) ?: return
             val ktFile = context.containingFileSymbol?.sourceFile ?: return
-            val visitor = visitors[ktFile]
+            val visitor = state.visitors[ktFile]
 
             visitor?.visitClassReference(classSymbol, getIdentifier(source))
+        }
+    }
+
+    private class SemanticVariableAssignmentChecker(private val state: AnalyzerCompilationState) :
+        FirExpressionChecker<FirVariableAssignment>(MppCheckerKind.Common) {
+        context(context: CheckerContext, reporter: DiagnosticReporter)
+        override fun check(expression: FirVariableAssignment) {
+            val access = expression.lValue as? FirQualifiedAccessExpression ?: return
+            val reference = access.calleeReference as? FirResolvedNamedReference ?: return
+            val source = reference.source ?: access.source ?: return
+            if (source.kind is KtFakeSourceElementKind) return
+            val ktFile = context.containingFileSymbol?.sourceFile ?: return
+            state.visitors[ktFile]?.visitAccess(
+                reference.resolvedSymbol,
+                getIdentifier(source),
+                "write",
+            )
         }
     }
 }

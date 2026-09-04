@@ -12,6 +12,7 @@ import org.jetbrains.kotlin.cli.common.messages.MessageRenderer
 import org.jetbrains.kotlin.cli.common.messages.PrintingMessageCollector
 import org.jetbrains.kotlin.config.CommonConfigurationKeys
 import org.jetbrains.kotlin.config.CompilerConfiguration
+import org.jetbrains.kotlin.diagnostics.impl.BaseDiagnosticsCollector
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.scip_code.scip.Document
 import org.scip_code.scip_java.shared.ScipShardPaths
@@ -29,24 +30,47 @@ class PostAnalysisExtension(
     private val sourceRoot: Path,
     private val targetRoot: Path,
     private val callback: (Document) -> Unit,
+    private val graphMessages: KotlinGraphMessages? = null,
+    private val state: AnalyzerCompilationState,
 ) : IrGenerationExtension {
     override fun generate(moduleFragment: IrModuleFragment, pluginContext: IrPluginContext) {
         try {
-            for ((ktSourceFile, visitor) in AnalyzerCheckers.visitors) {
+            for ((ktSourceFile, visitor) in state.visitors) {
                 try {
+                    val reporter =
+                        state.diagnosticReporters[ktSourceFile] as? BaseDiagnosticsCollector
+                    reporter
+                        ?.diagnosticsByFilePath
+                        ?.entries
+                        ?.firstOrNull { (file, _) ->
+                            runCatching {
+                                    Paths.get(file).toAbsolutePath().normalize() ==
+                                        Paths.get(ktSourceFile.path).toAbsolutePath().normalize()
+                                }
+                                .getOrDefault(file == ktSourceFile.path)
+                        }
+                        ?.value
+                        ?.forEach(visitor::graphDiagnostic)
+                    graphMessages?.snapshot()?.forEach { message ->
+                        visitor.graphDiagnostic(message.severity, message.message, message.location)
+                    }
                     val document = visitor.build()
                     scipShardPathForFile(ktSourceFile)?.let { outPath ->
                         ScipShardWriter.writeShard(outPath, document)
                     }
                     callback(document)
+                    visitor.writeGraph()
                 } catch (e: Exception) {
                     handleException(e)
+                    if (graphMessages != null) throw e
                 }
             }
         } catch (e: Exception) {
             handleException(e)
+            if (graphMessages != null) throw e
         }
-        AnalyzerCheckers.visitors.clear()
+        state.visitors.clear()
+        state.diagnosticReporters.clear()
     }
 
     private fun scipShardPathForFile(file: KtSourceFile): Path? {

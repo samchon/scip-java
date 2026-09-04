@@ -15,6 +15,12 @@ val KEY_SOURCES = CompilerConfigurationKey<Path>(VAL_SOURCES)
 const val VAL_TARGET = "targetroot"
 val KEY_TARGET = CompilerConfigurationKey<Path>(VAL_TARGET)
 
+const val VAL_GRAPH_ROOT = "graphroot"
+val KEY_GRAPH_ROOT = CompilerConfigurationKey<Path>(VAL_GRAPH_ROOT)
+
+const val VAL_GRAPH_TARGET = "graphtarget"
+val KEY_GRAPH_TARGET = CompilerConfigurationKey<String>(VAL_GRAPH_TARGET)
+
 const val PLUGIN_ID = "scip-kotlinc"
 
 @OptIn(ExperimentalCompilerApi::class)
@@ -34,6 +40,18 @@ class AnalyzerCommandLineProcessor : CommandLineProcessor {
                 "the absolute path to the directory where to generate SCIP files.",
                 required = true,
             ),
+            CliOption(
+                VAL_GRAPH_ROOT,
+                "<path>",
+                "the task-owned staging directory for graph shards",
+                required = false,
+            ),
+            CliOption(
+                VAL_GRAPH_TARGET,
+                "<coordinate>",
+                "the Gradle compilation coordinate that owns graph shards",
+                required = false,
+            ),
         )
 
     override fun processOption(
@@ -44,6 +62,8 @@ class AnalyzerCommandLineProcessor : CommandLineProcessor {
         when (option.optionName) {
             VAL_SOURCES -> configuration.put(KEY_SOURCES, Paths.get(value))
             VAL_TARGET -> configuration.put(KEY_TARGET, Paths.get(value))
+            VAL_GRAPH_ROOT -> configuration.put(KEY_GRAPH_ROOT, Paths.get(value))
+            VAL_GRAPH_TARGET -> configuration.put(KEY_GRAPH_TARGET, value)
         }
     }
 }

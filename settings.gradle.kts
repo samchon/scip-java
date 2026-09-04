@@ -23,6 +23,7 @@ include(
     "scip-aggregator",
     "scip-maven-plugin",
     "scip-gradle-plugin",
+    "scip-kotlin-gradle-plugin",
     "scip-java",
     "scip-snapshots",
     "scip-snapshots-java-common",
