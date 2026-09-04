@@ -46,6 +46,42 @@ abstract class BuildToolHarness {
         return exit to buffer.toString(StandardCharsets.UTF_8.name())
     }
 
+    /** Run a line protocol with stdout isolated from diagnostics and tool output. */
+    protected fun runScipJavaProtocol(
+        workingDirectory: Path,
+        arguments: List<String>,
+        standardInput: String,
+    ): ProtocolRun {
+        val outputBuffer = ByteArrayOutputStream()
+        val errorBuffer = ByteArrayOutputStream()
+        val output = PrintStream(outputBuffer, true, StandardCharsets.UTF_8.name())
+        val error = PrintStream(errorBuffer, true, StandardCharsets.UTF_8.name())
+        val app = ScipJavaApp()
+        app.env =
+            CliEnvironment(
+                workingDirectory = workingDirectory,
+                standardInput =
+                    ByteArrayInputStream(standardInput.toByteArray(StandardCharsets.UTF_8)),
+                standardOutput = output,
+                standardError = error,
+            )
+        val systemOutput = System.out
+        System.setOut(output)
+        val exit =
+            try {
+                app.run(arguments)
+            } finally {
+                System.setOut(systemOutput)
+            }
+        return ProtocolRun(
+            exit,
+            outputBuffer.toString(StandardCharsets.UTF_8.name()),
+            errorBuffer.toString(StandardCharsets.UTF_8.name()),
+        )
+    }
+
+    protected data class ProtocolRun(val exit: Int, val output: String, val error: String)
+
     private fun listScipShards(targetroot: Path): List<Path> {
         if (!Files.isDirectory(targetroot)) return emptyList()
         Files.walk(targetroot).use { stream ->

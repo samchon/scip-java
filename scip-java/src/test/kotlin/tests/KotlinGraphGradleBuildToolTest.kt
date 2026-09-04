@@ -105,17 +105,17 @@ class KotlinGraphGradleBuildToolTest : BuildToolHarness() {
                 listOf(residentFirst, residentSecond).mapIndexed { index, output ->
                     """{"id":${index + 1},"protocolVersion":1,"output":${JsonPrimitive(output.toString())}}"""
                 }
-            val (residentExit, residentLog) =
-                runScipJava(
+            val resident =
+                runScipJavaProtocol(
                     workingDirectory,
                     listOf("kotlin-graph-server"),
                     requests.joinToString("\n", postfix = "\n"),
                 )
-            assertEquals(0, residentExit, residentLog)
+            assertEquals(0, resident.exit, resident.error)
             val responses =
-                residentLog
+                resident.output
                     .lineSequence()
-                    .filter { it.startsWith("{\"id\":") }
+                    .filter { it.isNotBlank() }
                     .map(Json::parseToJsonElement)
                     .map { it.jsonObject }
                     .toList()
@@ -123,7 +123,7 @@ class KotlinGraphGradleBuildToolTest : BuildToolHarness() {
                 listOf(1, 2),
                 responses.map { it.getValue("id").jsonPrimitive.content.toInt() },
             )
-            assertTrue(responses.all { it.getValue("ok").jsonPrimitive.boolean }, residentLog)
+            assertTrue(responses.all { it.getValue("ok").jsonPrimitive.boolean }, resident.error)
             assertContentEquals(
                 Files.readAllBytes(residentFirst),
                 Files.readAllBytes(residentSecond),

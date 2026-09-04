@@ -25,6 +25,19 @@ class KotlinGraphServerCommand : CliktCommand(name = "kotlin-graph-server") {
         "Serve compiler-owned Kotlin graph generations over NDJSON."
 
     override fun run() {
+        // Gradle's Tooling API writes distribution-download progress directly
+        // to System.out before a BuildLauncher can redirect its output. Keep
+        // stdout reserved for protocol frames even on the first cold launch.
+        val systemOutput = System.out
+        System.setOut(app.env.standardError)
+        try {
+            serve()
+        } finally {
+            System.setOut(systemOutput)
+        }
+    }
+
+    private fun serve() {
         val project = app.env.workingDirectory.toAbsolutePath().normalize()
         val targetRoot = project.resolve("build/scip-targetroot")
         val temporary = Files.createTempDirectory("scip-java-kotlin-graph")
