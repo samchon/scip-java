@@ -198,15 +198,29 @@ final class KotlinGraphGenerationStore {
             property ->
                 rows.add(
                     "property[" + property.getKey() + "]=" + stableProperty(property.getValue())));
-    List<String> inputs =
+    Set<Path> sources =
+        kotlinSources(task).stream()
+            .map(java.io.File::toPath)
+            .map(Path::toAbsolutePath)
+            .map(Path::normalize)
+            .collect(java.util.stream.Collectors.toSet());
+    List<Path> inputs =
         task.getInputs().getFiles().getFiles().stream()
             .map(java.io.File::toPath)
             .map(Path::toAbsolutePath)
             .map(Path::normalize)
-            .map(this::universeInputUnchecked)
-            .sorted(KotlinGraphGenerationStore::compareUtf8)
+            .sorted(Comparator.comparing(Path::toString, KotlinGraphGenerationStore::compareUtf8))
             .toList();
-    for (String input : inputs) rows.add("input=" + input);
+    for (Path input : inputs) {
+      // Source membership belongs to the target universe; source contents do
+      // not. Each shard already binds the bytes its compiler read, and putting
+      // those bytes here turns an ordinary body edit into a classpath reload
+      // that prevents unchanged shards from being carried forward.
+      rows.add(
+          sources.contains(input)
+              ? "source=" + normalizedPath(input)
+              : "input=" + universeInputUnchecked(input));
+    }
     return rows;
   }
 
@@ -214,12 +228,12 @@ final class KotlinGraphGenerationStore {
     Path normalized = input.toAbsolutePath().normalize();
     String digest = fileDigest(normalized);
     String identity;
-    if (normalized.startsWith(sourceRoot)) {
-      identity = normalizedPath(normalized);
-    } else if (normalized.equals(embeddedKotlincPlugin)) {
+    if (normalized.equals(embeddedKotlincPlugin)) {
       // The compiler plugin is extracted into a fresh CLI temporary directory on every cold run.
       // Its semantic identity is the embedded role plus exact bytes, not that random parent path.
       identity = "embedded/scip-kotlinc.jar";
+    } else if (normalized.startsWith(sourceRoot)) {
+      identity = normalizedPath(normalized);
     } else {
       // Ordinary compiler inputs retain path-to-content association. Basename-only identities let
       // two same-named classpath entries exchange bytes without changing the universe.

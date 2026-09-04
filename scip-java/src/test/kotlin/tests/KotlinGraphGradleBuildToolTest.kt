@@ -59,6 +59,7 @@ class KotlinGraphGradleBuildToolTest : BuildToolHarness() {
             assertEquals(0, firstExit, firstLog)
             val first = Files.readAllBytes(workingDirectory.resolve("first.json"))
             assertGraphContract(first)
+            val firstUniverse = mainUniverse(first)
 
             val (secondExit, secondLog) = run("second.json")
             assertEquals(0, secondExit, secondLog)
@@ -73,8 +74,12 @@ class KotlinGraphGradleBuildToolTest : BuildToolHarness() {
             val (editedExit, editedLog) = run("edited.json")
             assertEquals(0, editedExit, editedLog)
             assertTrue(editedLog.contains("Reusing configuration cache"), editedLog)
-            assertFalse(
-                first.contentEquals(Files.readAllBytes(workingDirectory.resolve("edited.json")))
+            val edited = Files.readAllBytes(workingDirectory.resolve("edited.json"))
+            assertFalse(first.contentEquals(edited))
+            assertEquals(
+                firstUniverse,
+                mainUniverse(edited),
+                "a source body edit must not move the target/classpath universe",
             )
 
             val manifest = targetRoot.resolve("META-INF/kotlin-graph-store/MANIFEST")
@@ -240,6 +245,17 @@ class KotlinGraphGradleBuildToolTest : BuildToolHarness() {
             .getValue("targets")
             .jsonArray
             .sumOf { it.jsonObject.getValue("shards").jsonArray.size }
+
+    private fun mainUniverse(bytes: ByteArray): String =
+        Json.parseToJsonElement(bytes.toString(StandardCharsets.UTF_8))
+            .jsonObject
+            .getValue("targets")
+            .jsonArray
+            .map { it.jsonObject }
+            .single { it.getValue("name").jsonPrimitive.content == ":|jvm|main" }
+            .getValue("universe")
+            .jsonPrimitive
+            .content
 
     private fun assertBuildReportRecordedNonIncrementalReason(reports: Path) {
         val reportFiles =
