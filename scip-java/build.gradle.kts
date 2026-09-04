@@ -1,6 +1,7 @@
 import org.scip_code.scip_java.buildlogic.JavacInternals
 import org.scip_code.scip_java.buildlogic.registerGeneratedFile
 import org.scip_code.scip_java.buildlogic.shadowJarArtifact
+import org.gradle.jvm.application.tasks.CreateStartScripts
 
 plugins {
     id("scip.java-base")
@@ -40,6 +41,23 @@ tasks.named<Test>("test") {
 
 application {
     mainClass.set("org.scip_code.scip_java.ScipJava")
+}
+
+// Expanding one absolute distribution path for every runtime jar can push the
+// generated batch file past cmd.exe's 8,191-character command-line limit. Java
+// expands a classpath wildcard itself, after cmd.exe has parsed the short
+// command, while the distribution still copies the exact runtime classpath.
+tasks.named<CreateStartScripts>("startScripts") {
+    doLast {
+        val script = windowsScript.readText()
+        val classpath = Regex("(?m)^set CLASSPATH=.*$")
+        check(classpath.containsMatchIn(script)) {
+            "generated Windows launcher has no classpath assignment"
+        }
+        windowsScript.writeText(
+            script.replace(classpath) { "set CLASSPATH=%APP_HOME%\\lib\\*" },
+        )
+    }
 }
 
 val generateEmbeddedResources = tasks.register<Sync>("generateEmbeddedResources") {
