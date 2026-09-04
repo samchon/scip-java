@@ -6,8 +6,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
-import java.security.MessageDigest
-import java.util.HexFormat
 import org.scip_code.scip_java.Embedded
 import org.scip_code.scip_java.commands.IndexCommand
 import org.scip_code.scip_java.commands.KotlinGraphAggregateRunner
@@ -120,12 +118,13 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
     }
 
     private fun initScript(tmp: Path): Path {
-        val graphArtifact =
-            if (index.kotlinGraphOutput == null) null else prepareKotlinGraphArtifact(tmp)
-        val pluginpath = graphArtifact?.javacPlugin ?: Embedded.scipJar(tmp)
-        val gradlePluginPath = graphArtifact?.gradlePlugin ?: Embedded.gradlePluginJar(tmp)
-        val kotlinGradlePluginPath = graphArtifact?.kotlinGradlePlugin
-        val scipKotlincPath = graphArtifact?.jar ?: Embedded.scipKotlincJar(tmp)
+        if (index.kotlinGraphOutput != null) {
+            return KotlinGraphGradleIntegration.prepare(index.workingDirectory, targetroot(), tmp)
+                .initScript
+        }
+        val pluginpath = Embedded.scipJar(tmp)
+        val gradlePluginPath = Embedded.gradlePluginJar(tmp)
+        val scipKotlincPath = Embedded.scipKotlincJar(tmp)
         val dependenciesPath = targetroot().resolve("dependencies.txt")
         Files.deleteIfExists(dependenciesPath)
         fun scriptPath(path: Path): String = path.toString().replace('\\', '/')
@@ -143,100 +142,20 @@ This means our SCIP compiler plugin was not attached to one or more JavaCompile 
 
              import org.scip_code.scip_java.gradle.ScipGradlePlugin
 
-             ${if (graphArtifact == null) "" else """
-             settingsEvaluated { settings ->
-               settings.dependencyResolutionManagement.repositories.maven {
-                url = new File("${scriptPath(graphArtifact.repository)}")
-               }
-             }
-             """}
-
              allprojects {
-               ${if (kotlinGradlePluginPath == null) "" else """buildscript {
-                 dependencies {
-                   classpath(files("${scriptPath(kotlinGradlePluginPath)}"))
-                 }
-               }
-               """}
                project.ext["scipTarget"] = "${scriptPath(targetroot())}"
                project.ext["javacPluginJar"] = "${scriptPath(pluginpath)}"
                project.ext["dependenciesOut"] = "${scriptPath(dependenciesPath)}"
                project.ext["scipKotlincJar"] = "${scriptPath(scipKotlincPath)}"
-               project.ext["scipKotlinGraphEnabled"] = ${graphArtifact != null}
-               ${if (graphArtifact == null) "" else """project.ext["scipKotlincGraphJar"] = "${scriptPath(graphArtifact.jar)}"
-               project.ext["scipKotlincGraphRepository"] = "${scriptPath(graphArtifact.repository)}"
-               """}
+               project.ext["scipKotlinGraphEnabled"] = false
                apply plugin: ScipGradlePlugin
              }
             """
                 .trimIndent()
 
-        val out = graphArtifact?.initScript ?: tmp.resolve("init-script.gradle")
+        val out = tmp.resolve("init-script.gradle")
         writeIfChanged(out, script.toByteArray(StandardCharsets.UTF_8))
         return out
-    }
-
-    private data class KotlinGraphArtifact(
-        val repository: Path,
-        val jar: Path,
-        val javacPlugin: Path,
-        val gradlePlugin: Path,
-        val kotlinGradlePlugin: Path,
-        val initScript: Path,
-    )
-
-    private fun prepareKotlinGraphArtifact(tmp: Path): KotlinGraphArtifact {
-        val kotlinc = Files.readAllBytes(Embedded.scipKotlincJar(tmp))
-        val javac = Files.readAllBytes(Embedded.scipJar(tmp))
-        val gradle = Files.readAllBytes(Embedded.gradlePluginJar(tmp))
-        val kotlinGradle = Files.readAllBytes(Embedded.kotlinGradlePluginJar(tmp))
-        val bundle = contentDigest(kotlinc, javac, gradle, kotlinGradle)
-        val tools =
-            targetroot().resolve("META-INF/kotlin-graph-tools").resolve(bundle).toAbsolutePath()
-        val repository = tools.resolve("repository")
-        val artifact =
-            repository.resolve(
-                "org/scip-code/scip-kotlinc-k2-graph/2.3.20-e940c188/scip-kotlinc-k2-graph-2.3.20-e940c188.jar"
-            )
-        writeIfChanged(artifact, kotlinc)
-        val pom =
-            """
-            <project xmlns="http://maven.apache.org/POM/4.0.0">
-              <modelVersion>4.0.0</modelVersion>
-              <groupId>org.scip-code</groupId>
-              <artifactId>scip-kotlinc-k2-graph</artifactId>
-              <version>2.3.20-e940c188</version>
-            </project>
-            """
-                .trimIndent() + "\n"
-        writeIfChanged(
-            artifact.resolveSibling("scip-kotlinc-k2-graph-2.3.20-e940c188.pom"),
-            pom.toByteArray(StandardCharsets.UTF_8),
-        )
-        val persistentJavac = tools.resolve("embedded/scip-plugin.jar")
-        val persistentGradle = tools.resolve("embedded/gradle-plugin.jar")
-        val persistentKotlinGradle = tools.resolve("embedded/kotlin-gradle-plugin.jar")
-        writeIfChanged(persistentJavac, javac)
-        writeIfChanged(persistentGradle, gradle)
-        writeIfChanged(persistentKotlinGradle, kotlinGradle)
-        return KotlinGraphArtifact(
-            repository,
-            artifact,
-            persistentJavac,
-            persistentGradle,
-            persistentKotlinGradle,
-            tools.resolve("init-script.gradle"),
-        )
-    }
-
-    private fun contentDigest(vararg inputs: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        for (input in inputs) {
-            digest.update(input.size.toString().toByteArray(StandardCharsets.UTF_8))
-            digest.update(':'.code.toByte())
-            digest.update(input)
-        }
-        return HexFormat.of().formatHex(digest.digest())
     }
 
     private fun writeIfChanged(output: Path, bytes: ByteArray) {

@@ -1,5 +1,6 @@
 package tests
 
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.nio.charset.StandardCharsets
@@ -25,13 +26,19 @@ import org.scip_code.scip_java.buildtools.ClasspathEntry
 abstract class BuildToolHarness {
 
     /** Run `scip-java` in-process with stdout/stderr redirected into a buffer. */
-    protected fun runScipJava(workingDirectory: Path, arguments: List<String>): Pair<Int, String> {
+    protected fun runScipJava(
+        workingDirectory: Path,
+        arguments: List<String>,
+        standardInput: String = "",
+    ): Pair<Int, String> {
         val buffer = ByteArrayOutputStream()
         val stream = PrintStream(buffer, true, StandardCharsets.UTF_8.name())
         val app = ScipJavaApp()
         app.env =
             CliEnvironment(
                 workingDirectory = workingDirectory,
+                standardInput =
+                    ByteArrayInputStream(standardInput.toByteArray(StandardCharsets.UTF_8)),
                 standardOutput = stream,
                 standardError = stream,
             )

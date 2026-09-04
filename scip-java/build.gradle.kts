@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.kotlin.scripting.dependencies)
     implementation(libs.kotlin.scripting.dependencies.maven)
     implementation(libs.kotlinx.serialization.json.jvm)
+    implementation(libs.gradle.tooling.api)
 
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlin.test.junit5)

@@ -1,6 +1,7 @@
 [versions]
 clikt = "5.1.0"
 gradle-api = "8.11.1"
+gradle-tooling-api = "7.3-20210825160000+0000"
 junit-jupiter = "5.11.4"
 kctfork = "0.12.1"
 kotest = "6.2.1"
@@ -21,6 +22,7 @@ vanniktech-maven-publish = "0.37.0"
 clikt-jvm = { module = "com.github.ajalt.clikt:clikt-jvm", version.ref = "clikt" }
 gradle-api = { module = "dev.gradleplugins:gradle-api", version.ref = "gradle-api" }
 gradle-test-kit = { module = "dev.gradleplugins:gradle-test-kit", version.ref = "gradle-api" }
+gradle-tooling-api = { module = "org.gradle:gradle-tooling-api", version.ref = "gradle-tooling-api" }
 kctfork-core = { module = "dev.zacsweers.kctfork:core", version.ref = "kctfork" }
 kotest-assertions-core = { module = "io.kotest:kotest-assertions-core-jvm", version.ref = "kotest" }
 kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }

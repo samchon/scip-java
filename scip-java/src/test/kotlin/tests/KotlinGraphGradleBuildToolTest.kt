@@ -10,6 +10,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -91,6 +92,36 @@ class KotlinGraphGradleBuildToolTest : BuildToolHarness() {
             assertContentEquals(
                 first,
                 Files.readAllBytes(workingDirectory.resolve("recovered.json")),
+            )
+
+            val residentFirst = workingDirectory.resolve("resident-first.json")
+            val residentSecond = workingDirectory.resolve("resident-second.json")
+            val requests =
+                listOf(residentFirst, residentSecond).mapIndexed { index, output ->
+                    """{"id":${index + 1},"protocolVersion":1,"output":${JsonPrimitive(output.toString())}}"""
+                }
+            val (residentExit, residentLog) =
+                runScipJava(
+                    workingDirectory,
+                    listOf("kotlin-graph-server"),
+                    requests.joinToString("\n", postfix = "\n"),
+                )
+            assertEquals(0, residentExit, residentLog)
+            val responses =
+                residentLog
+                    .lineSequence()
+                    .filter { it.startsWith("{\"id\":") }
+                    .map(Json::parseToJsonElement)
+                    .map { it.jsonObject }
+                    .toList()
+            assertEquals(
+                listOf(1, 2),
+                responses.map { it.getValue("id").jsonPrimitive.content.toInt() },
+            )
+            assertTrue(responses.all { it.getValue("ok").jsonPrimitive.boolean }, residentLog)
+            assertContentEquals(
+                Files.readAllBytes(residentFirst),
+                Files.readAllBytes(residentSecond),
             )
 
             val created = workingDirectory.resolve("src/main/kotlin/example/Created.kt")
